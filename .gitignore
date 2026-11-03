@@ -1,0 +1,77 @@
+# JavaScript dependencies and package manager caches
+node_modules/
+.pnp.*
+.yarn/cache/
+.npm/
+.pnpm-store/
+
+# Build output, deployment state and coverage
+dist/
+build/
+out/
+coverage/
+.vercel/
+.netlify/
+.cache/
+
+# Environment variables and machine-specific settings
+.env
+.env.*
+*.local
+/.vscode/
+/.idea/
+/.codex/
+/.agents/
+.aws/
+.ssh/
+
+# Credentials, private keys and sensitive diagnostic files
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+id_rsa
+id_ed25519
+credentials.json
+credentials-*.json
+*service-account*.json
+*secrets*.json
+*.har
+
+# Local Python/notebook environment (not part of this static website)
+/b5bf2e54cb654f7b/
+/environment.yml
+.conda/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Generated browser QA output; keep the reusable scripts in tools/
+/tools/phase2-*/
+/tools/local-*/
+
+# Personal documents and local data; retain only the bundled test PDF
+*.pdf
+!/web/samples/sample.pdf
+/uploads/
+/private/
+/backups/
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Logs, temporary files and editor/OS artifacts
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
