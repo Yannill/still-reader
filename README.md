@@ -11,7 +11,7 @@ Windows 下双击 `启动阅读器.bat`，或在项目根目录执行：
 powershell -NoProfile -ExecutionPolicy Bypass -File .\serve.ps1
 ```
 
-在浏览器打开 `http://localhost:8080/`。不需要安装 npm 依赖或运行构建。
+在浏览器打开 `https://lucent-pothos-40e0be.netlify.app/`。不需要安装 npm 依赖或运行构建。
 
 ## 网站文件
 
