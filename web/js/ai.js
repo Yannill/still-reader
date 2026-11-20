@@ -61,21 +61,35 @@ R.ai = (() => {
       const url = c.baseURL.replace(/\/+$/, '') + '/chat/completions';
       const body = { model: opts.model || c.model, messages, stream: true, temperature: opts.temperature ?? 0.5 };
       let resp;
+      const callProxy = (proxyUrl) => fetch(proxyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, apiKey: c.apiKey, body }),
+        signal: opts.signal,
+      });
       if (c.proxy) {
-        // 走 C++ 本地服务器转发（解决跨域、隐藏 Key 于本机）
-        resp = await fetch(c.proxy, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, apiKey: c.apiKey, body }),
-          signal: opts.signal,
-        });
+        // 使用用户自定义的代理地址
+        resp = await callProxy(c.proxy);
       } else {
-        resp = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + c.apiKey },
-          body: JSON.stringify(body),
-          signal: opts.signal,
-        });
+        try {
+          resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + c.apiKey },
+            body: JSON.stringify(body),
+            signal: opts.signal,
+          });
+        } catch (directErr) {
+          // 浏览器直连遇到 CORS 跨域拦截（如智谱 GLM、豆包、通义千问等）时，自动改走同源内置代理 /api/ai/chat
+          if (opts.signal?.aborted) throw directErr;
+          if (location.protocol === 'http:' || location.protocol === 'https:') {
+            resp = await callProxy('/api/ai/chat');
+            if (resp.status === 404) {
+              throw new Error('浏览器直连被目标接口跨域拦截，且当前静态服务未启用 /api/ai/chat 代理');
+            }
+          } else {
+            throw directErr;
+          }
+        }
       }
       if (!resp.ok) {
         let msg = await resp.text().catch(() => '');

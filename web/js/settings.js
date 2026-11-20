@@ -19,7 +19,7 @@ R.settingsUI = (() => {
           <datalist id="sModels">${(pre.models || []).map((m) => `<option value="${R.esc(m)}">`).join('')}</datalist></div>
         <div class="set-row"><label>API Key</label><input type="password" id="sKey" value="${R.esc(ai.apiKey)}" placeholder="只保存在本机浏览器里" /></div>
         <div class="set-row"><label>代理地址</label><input type="text" id="sProxy" value="${R.esc(ai.proxy)}" placeholder="可选，如 http://localhost:8080/api/ai/chat" /></div>
-        <div class="set-note">浏览器直连可能受跨域限制。当前本地服务只提供静态网页；代理需要另行部署，再填写地址。Key 仅保存在此浏览器的本地设置中。</div>
+        <div class="set-note">代理地址留空即可：线上版与本地服务已内置跨域转发（智谱、豆包、通义千问等均可直接使用）。Key 仅保存在此浏览器的本地设置中。</div>
         <div class="set-row"><label>支持图片</label><div class="set-inline"><label class="switch"><input type="checkbox" id="sVision" ${ai.vision ? 'checked' : ''}/><i></i></label><span class="set-hint">扫描版 PDF 的翻译 / 提问需要</span></div></div>
         <div class="set-row"><label></label><div class="set-inline"><button class="chip ghost" id="sTest">测试连接</button><span id="sTestRes" class="set-hint"></span></div></div>
       </div>
