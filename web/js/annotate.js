@@ -386,8 +386,8 @@ R.annot = (() => {
     const open = force === undefined ? p.classList.contains('hidden') : force;
     if (open) { R.hide(R.$('#chatPanel')); R.hide(R.$('#outlinePanel')); R.$('#btnOutline').classList.remove('on'); }
     p.classList.toggle('hidden', !open);
-    R.$('#btnAnnotPanel').classList.toggle('on', open);
-    R.$('#btnChat').classList.remove('on');
+    R.$('#btnAnnotPanel')?.classList.toggle('on', open);
+    R.$('#btnChat')?.classList.remove('on');
     renderPanel();
     window.dispatchEvent(new Event('resize'));
   }
@@ -461,7 +461,10 @@ R.annot = (() => {
       const cur = R.focus.current();
       if (!cur) return R.toast('先打开专注模式（F），再用 H / U / C 标注当前行');
       const l = cur.line;
-      const a = add({ page: cur.i, type: k === 'u' ? 'underline' : 'highlight', rects: [{ x: l.x, y: l.y, w: l.w, h: l.h }], text: l.text });
+      const a = add({
+        page: cur.i, type: k === 'u' ? 'underline' : 'highlight',
+        rects: [{ x: l.x, y: l.y, w: l.w, h: l.h }], text: l.text,
+      });
       if (k === 'c') {
         const c = R.viewer.toContent(cur.i, l);
         const sr = V().scroller.getBoundingClientRect();
@@ -504,5 +507,5 @@ R.annot = (() => {
     R.download(md, meta.title + '-笔记.md', 'text/markdown');
   }
 
-  return { init, load, add, remove, undo, setTool, togglePanel, renderAll, list: () => A.list, flush: () => persist.flush() };
+  return { init, load, selectionInfo, add, remove, undo, setTool, togglePanel, renderAll, list: () => A.list, flush: () => persist.flush() };
 })();

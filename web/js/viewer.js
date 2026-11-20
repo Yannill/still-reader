@@ -19,15 +19,21 @@ R.viewer = (() => {
     }, 200));
   }
 
+  function loadPdf(bytes) {
+    return pdfjsLib.getDocument({
+      data: bytes.slice(), // PDF.js transfers the buffer to its worker.
+      cMapUrl: R.PDFJS.cmaps,
+      cMapPacked: true,
+      standardFontDataUrl: R.PDFJS.fonts,
+      isEvalSupported: false,
+    });
+  }
+
   async function open(meta, bytes, preparedPdf) {
     close();
     V.meta = meta;
     V.bytes = bytes;
-    const task = preparedPdf ? null : pdfjsLib.getDocument({
-      data: bytes.slice(0), // pdf.js 会转移 buffer，传副本，原件留给 pdf-lib
-      cMapUrl: R.PDFJS.cmaps, cMapPacked: true, standardFontDataUrl: R.PDFJS.fonts,
-    });
-    V.pdf = preparedPdf || await task.promise;
+    V.pdf = preparedPdf || await loadPdf(bytes).promise;
     V.pages = [];
     for (let i = 1; i <= V.pdf.numPages; i++) {
       const page = await V.pdf.getPage(i);
@@ -152,16 +158,38 @@ R.viewer = (() => {
     if (p.lines) return Promise.resolve(p.lines);
     if (p.linesPromise) return p.linesPromise;
     const pdfRef = V.pdf;
+    if ((p.lineAttempts || 0) >= 2) return Promise.resolve([]);
+    p.lineAttempts = (p.lineAttempts || 0) + 1;
+    const generation = p.lineAttempts;
     p.linesPromise = (async () => {
       let lines = [];
+      let timeout;
       try {
-        const tc = await getText(p);
-        const chars = tc.items.reduce((n, it) => n + (it.str ? it.str.trim().length : 0), 0);
-        if (chars >= 15) { lines = R.core.linesFromText(tc, p.vp1); p.scanned = false; }
-        if (!lines.length) { p.scanned = true; lines = await detectScanned(p); }
-      } catch (e) { console.warn('lines', e); }
-      if (pdfRef !== V.pdf) return [];
+        lines = await Promise.race([(async()=>{
+          const tc = await getText(p);
+          if(V.meta?.pos?.i===i && V.meta.pos.layout!==2)p.legacyLines=R.core.linesFromText(tc,p.vp1,true);
+          let found = R.core.linesFromText(tc, p.vp1);
+          p.scanned = !found.length;
+          if (!found.length) found = await detectScanned(p);
+          return found;
+        })(),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('页面识别超时')),6000);})]);
+        p.lineStatus = lines.length ? 'ready' : 'unresolved';
+      } catch (e) { p.lineStatus='error'; p.textPromise=null; console.warn('页面文字暂不可用：',e.message); }
+      finally { clearTimeout(timeout); p.linesPromise=null; }
+      if (pdfRef !== V.pdf || generation !== p.lineAttempts) return [];
+      if (!lines.length) return [];
+      R.text.decorate(lines,p.vp1.width,p.vp1.height);
       p.lines = lines;
+      // Only repeated margin text is classified as a running header. Small
+      // footnotes and captions remain readable regardless of their font size.
+      const signature=l=>l.text.trim().replace(/\d+/g,'#');
+      for(const other of V.pages) {
+        if(other===p || !other.lines)continue;
+        for(const l of lines.filter(l=>l.y<p.vp1.height*.08 || l.y>p.vp1.height*.92)) {
+          const match=other.lines.find(m=>signature(m)===signature(l) && l.text.length>3 && Math.abs(m.y/other.vp1.height-l.y/p.vp1.height)<.025);
+          if(match && l.role!=='page-number')l.role=match.role='running-header';
+        }
+      }
       R.bus.emit('lines-ready', i);
       return lines;
     })();
@@ -306,7 +334,7 @@ R.viewer = (() => {
   }
 
   return {
-    V, init, open, close, setScale, fitScale, fitPageScale, captureAnchor, restoreAnchor, ensureLines, renderPage, toContent, fromClient, lineAt,
+    V, init, loadPdf, open, close, setScale, fitScale, fitPageScale, captureAnchor, restoreAnchor, ensureLines, renderPage, toContent, fromClient, lineAt,
     currentPage, pageText, pageImage, textInRange,
   };
 })();

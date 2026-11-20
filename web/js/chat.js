@@ -18,7 +18,8 @@ R.chat = (() => {
   };
 
   function init() {
-    R.$('#btnChat').onclick = () => toggle();
+    const btnChat = R.$('#btnChat');
+    if (btnChat) btnChat.onclick = () => toggle();
     R.$('#btnChatSend').onclick = () => send(R.$('#chatInput').value);
     const ta = R.$('#chatInput');
     ta.addEventListener('keydown', (e) => {
@@ -73,7 +74,7 @@ R.chat = (() => {
     const open = force === undefined ? p.classList.contains('hidden') : force;
     if (open) { R.hide(R.$('#outlinePanel')); R.$('#btnOutline').classList.remove('on'); R.hide(R.$('#annotPanel')); R.$('#btnAnnotPanel').classList.remove('on'); }
     p.classList.toggle('hidden', !open);
-    R.$('#btnChat').classList.toggle('on', open);
+    R.$('#btnChat')?.classList.toggle('on', open);
     window.dispatchEvent(new Event('resize'));
     if (open) { render(); setTimeout(() => R.$('#chatInput').focus(), 50); }
   }
@@ -110,11 +111,12 @@ R.chat = (() => {
     if (!C.messages.length) {
       const ready = R.ai.isReady();
       box.innerHTML = `<div class="chat-welcome">
-        <b>读不进去？问我就好。</b><br>
-        我能看到你<b>正在读的这一页</b>和<b>专注框里的句子</b>。可以试试下面的快捷问题，或者直接问。<br>
-        这份文档的对话会自动保存，下次打开还在。
-        ${ready ? `<br><span style="font-size:12px">当前模型：${R.esc(R.ai.preset().name)} · ${R.esc(R.settings.ai.model)}</span>`
-          : `<br><br>还没有配置模型。<a href="javascript:void 0" data-open-settings style="color:var(--accent)">去设置 →</a>（也可以选“离线演示”先体验）`}
+        <div class="cw-title">读不进去？问我就好。</div>
+        <p class="cw-desc">我能看到你 <b>正在读的这一页</b> 和 <b>专注框里的句子</b>。可以点下方快捷问题，或直接输入想法。</p>
+        <p class="cw-sub">这份文档的对话会自动保存在本地，下次打开仍在。</p>
+        ${ready
+          ? `<div class="cw-status">当前模型：<b>${R.esc(R.ai.preset().name)}</b> · ${R.esc(R.settings.ai.model)}</div>`
+          : `<div class="cw-setup"><span>还没有配置 AI 模型（也可先选「离线演示」体验）</span><button type="button" class="cw-setup-btn" data-open-settings>前往设置 →</button></div>`}
       </div>`;
       return;
     }
@@ -131,8 +133,8 @@ R.chat = (() => {
     const parts = [];
     const meta = R.app.current();
     if (meta) parts.push(`【文档】${meta.title}（${meta.name}）`);
-    const cur = R.focus.current();
-    const pageI = cur ? cur.i : R.viewer.currentPage();
+    const pageI = R.viewer.currentPage();
+    const cur = R.focus.isOn() ? R.focus.current() : null;
     let image = C.image;
     if (R.$('#ctxPage').checked) {
       const t = await R.viewer.pageText(pageI);

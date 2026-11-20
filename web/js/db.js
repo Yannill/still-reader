@@ -53,6 +53,15 @@ R.db = (() => {
         t.onerror = t.onabort = () => reject(t.error || new Error('存储事务未完成'));
       });
     },
+    // Merge progress atomically with changes made in other tabs.
+    patchDoc(id, fields) {
+      return run('docs', 'readwrite', store => {
+        const request = store.get(id);
+        request.onsuccess = () => {
+          if (request.result) store.put({ ...request.result, ...fields });
+        };
+      });
+    },
     get: (store, key) => run(store, 'readonly', (s) => s.get(key)),
     all: (store) => run(store, 'readonly', (s) => s.getAll()),
     put: (store, val) => run(store, 'readwrite', (s) => s.put(val)),

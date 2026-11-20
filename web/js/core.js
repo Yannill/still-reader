@@ -4,7 +4,7 @@
  * 2. 扫描版 PDF：自适应二值化 + 水平投影 → 行带 → 垂直投影 → 行段（与 C++ LineDetector 同算法）
  * 3. 离线标题：从元数据/首页大字号文本/文件名中提炼“开题报告”这类简短中文标题
  *
- * 如果 web/wasm/reader_core.js（由 C++ 用 Emscripten 编译）存在，扫描版检测和标题生成
+ * 如果宿主显式提供 createReaderCore 工厂，扫描版检测和标题生成
  * 会优先调用 C++/WASM 版本；否则使用本文件的 JS 版本，结果一致。
  */
 'use strict';
@@ -32,6 +32,36 @@ R.core = (() => {
     let run = [];
     const flush = () => {
       if (!run.length) return;
+      const lastY=Math.max(...run.map(l=>l.y));
+      const footer=run.filter(l=>l.y===lastY && l.w<pageW*.08 && /^\d{1,5}$/.test(l.text||''));
+      const content=run.filter(l=>!footer.includes(l));
+      const left = content.filter((l) => l.x + l.w / 2 < pageW / 2);
+      const right = content.filter((l) => l.x + l.w / 2 >= pageW / 2);
+      const twoCol =
+        left.length >= 3 && right.length >= 3 &&
+        Math.min(...right.map((l) => l.x)) > pageW * 0.38 &&
+        Math.max(...left.map((l) => l.x + l.w)) < pageW * 0.62;
+      if (twoCol) out.push(...left, ...right,...footer);
+      else out.push(...run);
+      run = [];
+    };
+    for (const l of sorted) {
+      if (l.w < pageW * 0.6) run.push(l);
+      else { flush(); out.push(l); }
+    }
+    flush();
+    return out;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  文字版：pdf.js textContent → 行                                      */
+  /* ------------------------------------------------------------------ */
+  function legacyOrderLines(lines, pageW) {
+    const sorted = lines.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+    const out = [];
+    let run = [];
+    const flush = () => {
+      if (!run.length) return;
       const left = run.filter((l) => l.x + l.w / 2 < pageW / 2);
       const right = run.filter((l) => l.x + l.w / 2 >= pageW / 2);
       const twoCol =
@@ -50,10 +80,7 @@ R.core = (() => {
     return out;
   }
 
-  /* ------------------------------------------------------------------ */
-  /*  文字版：pdf.js textContent → 行                                      */
-  /* ------------------------------------------------------------------ */
-  function linesFromText(textContent, vp1) {
+  function linesFromText(textContent, vp1, legacy = false) {
     const segs = [];
     for (const it of textContent.items) {
       if (!it.str || !it.str.trim()) continue;
@@ -87,15 +114,41 @@ R.core = (() => {
       const aTop = Math.min(...a.items.map((s) => s.top)), aBot = Math.max(...a.items.map((s) => s.bottom));
       const bTop = Math.min(...b.items.map((s) => s.top)), bBot = Math.max(...b.items.map((s) => s.bottom));
       const overlap = Math.min(aBot, bBot) - Math.max(aTop, bTop);
-      const small = Math.min(a.fh, b.fh) < 0.75 * Math.max(a.fh, b.fh);
-      if (small && overlap > 0.3 * Math.min(aBot - aTop, bBot - bTop)) {
+      const small = Math.min(a.fh, b.fh) < (legacy ? 0.75 : 0.84) * Math.max(a.fh, b.fh);
+      if (small && overlap > (legacy ? 0.3 : 0.12) * Math.min(aBot - aTop, bBot - bTop)) {
+        const nextBase = b.fh > a.fh ? b.base : a.base;
         a.items.push(...b.items);
         a.fh = Math.max(a.fh, b.fh);
-        if (b.fh > a.fh) a.base = b.base;
+        a.base = nextBase;
         rows.splice(i, 1);
       }
     }
-    // 3) 行内按大间距切成段（分栏/表格）
+    // A gutter must recur on several baselines. A single wide word space is
+    // insufficient evidence for a column; narrow, repeated gutters still count.
+    const candidates = rows.flatMap(row => {
+      const a = row.items.slice().sort((a,b)=>a.x-b.x), out=[];
+      for(let j=1;j<a.length;j++) {
+        const left=a[j-1], right=a[j], gap=right.x-left.x2;
+        if(gap>row.fh*.65 && left.x2>vp1.width*.3 && right.x<vp1.width*.7 &&
+          a[0].x<vp1.width*.3 && a[a.length-1].x2>vp1.width*.7)
+          out.push({lo:left.x2,hi:right.x,base:row.base});
+      }
+      return out;
+    });
+    let gutter = null, support = 0;
+    for(const c of candidates) {
+      const mid=(c.lo+c.hi)/2, hits=candidates.filter(g=>g.lo<=mid && g.hi>=mid);
+      const hitBases=new Set(hits.map(g=>g.base));
+      const count=hitBases.size;
+      const crossings=rows.filter(r=>{
+        if(hitBases.has(r.base))return false;
+        const minX=Math.min(...r.items.map(s=>s.x)), maxX=Math.max(...r.items.map(s=>s.x2));
+        return minX<mid-r.fh && maxX>mid+r.fh;
+      }).length;
+      if(count>=3 && count>crossings*2 && count>support){gutter=mid;support=count;}
+    }
+    if(legacy)gutter=null;
+    // 3) Split at a supported column gutter, otherwise retain visual runs.
     const lines = [];
     for (const row of rows) {
       const items = row.items.sort((a, b) => a.x - b.x);
@@ -116,19 +169,91 @@ R.core = (() => {
           text += s.str;
         });
         lines.push({
-          x, y: top, w: x2 - x, h: bottom - top, fh: row.fh, text: text.replace(/\s+/g, ' ').trim(),
-          items: cur.items.map((s) => ({ x: s.x, x2: s.x2, str: s.str })),
+          x, y: top, w: x2 - x, h: bottom - top, fh: row.fh, text,
+          items: cur.items.map((s) => ({ x: s.x, x2: s.x2, str: s.str, y:s.top, h:s.bottom-s.top })),
+          column: gutter === null ? 0 : x >= gutter ? 1 : x2 <= gutter ? 0 : -1,
         });
       };
       for (const s of items) {
-        if (cur && s.x - cur.x2 > Math.max(1.8 * row.fh, 12)) { push(); cur = null; }
+        if (cur && ((gutter !== null && cur.x2 <= gutter && s.x >= gutter) || s.x - cur.x2 > (legacy ? Math.max(1.8*row.fh,12) : Math.max(4 * row.fh, vp1.width*.12)))) { push(); cur = null; }
         if (!cur) cur = { items: [], x2: -Infinity };
         cur.items.push(s);
         cur.x2 = Math.max(cur.x2, s.x2);
       }
       push();
     }
-    return orderLines(lines.filter((l) => l.h > 2 && l.w > 2), vp1.width);
+
+    // 4) 2D 数学公式与上下标聚合：将孤立的求和/连乘上下限（如 n, k, j=1, p=1, α,β）及同行内上标并入主公式/主行
+    if (!legacy && lines.length > 1) {
+      const rebuildLine = (host, frag) => {
+        const all = [...(host.items || []), ...(frag.items || [])].sort((a, b) => a.x - b.x || a.y - b.y);
+        const top = Math.min(host.y, frag.y);
+        const bottom = Math.max(host.y + host.h, frag.y + frag.h);
+        const left = Math.min(host.x, frag.x);
+        const right = Math.max(host.x + host.w, frag.x + frag.w);
+        const fh = Math.max(host.fh, frag.fh);
+        let text = '';
+        all.forEach((s, k) => {
+          if (k > 0) {
+            const gap = s.x - all[k - 1].x2;
+            const prev = text.slice(-1);
+            if (gap > fh * 0.22 && !(R.isCJK(prev) && R.isCJK(s.str[0])) && prev !== ' ') text += ' ';
+          }
+          text += s.str;
+        });
+        host.x = left; host.y = top; host.w = right - left; host.h = bottom - top;
+        host.fh = fh; host.text = text; host.items = all;
+      };
+      const isMathOrScript = (frag, host) => {
+        const t = (frag.text || '').trim();
+        if (!t) return true;
+        if ((frag.y < vp1.height * 0.08 || frag.y > vp1.height * 0.92) && /^(?:[-–—·]\s*)?(?:\d{1,5}|[ivxlcdm]{1,8})(?:\s*[-–—·])?$/i.test(t)) return false;
+        const compact = t.replace(/\s+/g, '');
+        if (R.isCJK(compact)) return false;
+        if (frag.w >= host.w * 0.82 && frag.fh >= host.fh * 0.9) return false;
+        const smallerFont = frag.fh < host.fh * 0.88;
+        const shortToken = compact.length <= 16 && frag.w < Math.max(host.w * 0.68, host.fh * 7);
+        const mathChars = /[=∑∏∫√∞≠≤≥±×÷+\-−^_()[\]{}α-ωΑ-Ω→′'∈ℕℤℚℝℂ…⋯]/.test(compact) || /^[A-Za-z0-9,=+.\-−()[\]{}→′'\s]+$/.test(t);
+        const hostHasMath = /[=∑∏∫√∞≠≤≥±×÷+\-−()[\]{}α-ωΑ-Ω→′'∈]|\b(?:det|sgn|lim|sin|cos|tan|log|ln|max|min|sup|inf)\b/.test(host.text || '');
+        if (smallerFont && shortToken && mathChars && !/[a-z]{4,}[.!?]$/.test(t)) return true;
+        if (hostHasMath && shortToken && mathChars && compact.length <= 12 && !/[A-Za-z]{5,}/.test(t)) return true;
+        return false;
+      };
+      let changed = true, guard = 0;
+      while (changed && guard++ < 8) {
+        changed = false;
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const frag = lines[i];
+          if (!frag) continue;
+          let bestIdx = -1, bestScore = Infinity;
+          for (let j = 0; j < lines.length; j++) {
+            if (i === j) continue;
+            const host = lines[j];
+            if (host.column !== frag.column) continue;
+            if (host.w < frag.w && host.fh < frag.fh) continue;
+            if (host.w === frag.w && host.fh === frag.fh && j > i) continue;
+            const overlapY = Math.min(frag.y + frag.h, host.y + host.h) - Math.max(frag.y, host.y);
+            const gapY = -overlapY;
+            const overlapX = Math.min(frag.x + frag.w, host.x + host.w) - Math.max(frag.x, host.x);
+            const withinX = frag.x >= host.x - host.fh * 1.8 && (frag.x + frag.w) <= (host.x + host.w + host.fh * 1.8);
+            const sameVisualRow = overlapY > Math.min(frag.h, host.h) * 0.18 && (withinX || overlapX > -Math.max(frag.fh, host.fh) * 1.6);
+            const limitAboveOrBelow = gapY <= Math.max(frag.fh, host.fh) * 0.78 && (withinX || overlapX >= Math.min(frag.w, host.w) * 0.35) && isMathOrScript(frag, host);
+            if (sameVisualRow || limitAboveOrBelow) {
+              const score = Math.max(0, gapY) * 3 + Math.abs((frag.y + frag.h / 2) - (host.y + host.h / 2));
+              if (score < bestScore) { bestScore = score; bestIdx = j; }
+            }
+          }
+          if (bestIdx >= 0) {
+            rebuildLine(lines[bestIdx], frag);
+            lines.splice(i, 1);
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
+
+    return (legacy?legacyOrderLines:orderLines)(lines.filter((l) => l.h > 2 && l.w > 2), vp1.width);
   }
 
   /* ------------------------------------------------------------------ */

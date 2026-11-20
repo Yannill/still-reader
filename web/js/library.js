@@ -22,45 +22,71 @@ R.library = (() => {
   }
 
   /* ---------------- 导入 ---------------- */
-  async function importFiles(fileList, boxId = R.study?.state.boxFilter || 'unsorted') {
-    const files = Array.from(fileList).filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
-    if (!files.length) { R.toast('请选择 PDF 文件', 'error'); return null; }
-    let lastId = null;
-    for (const f of files) {
-      const id = R.uid('d');
-      let info, bytes, digest;
-      try {
-        bytes = new Uint8Array(await f.arrayBuffer());
-        digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))).map(n => n.toString(16).padStart(2, '0')).join('');
-        const dup = docs.find(d => d.digest === digest && d.name === f.name);
-        if (dup) { lastId = dup.id; continue; }
-        info = await analyze(bytes, f.name);
-      }
-      catch (e) {
-        console.error(e);
-        R.toast(`无法打开「${f.name}」：${e.message || e}`, 'error', 4000);
+  async function findDuplicate(file, bytes, digest) {
+    for (const doc of docs) {
+      if (doc.name !== file.name || (doc.size != null && doc.size !== bytes.length)) continue;
+      if (digest && doc.digest) {
+        if (digest === doc.digest) return doc;
         continue;
       }
-      const meta = {
-        id, name: f.name, size: f.size, title: info.title, titleSource: 'local',
-        pageCount: info.pageCount, thumb: info.thumb, thumb2x: info.thumb, tone: info.tone, aspect: info.aspect, digest, boxId: boxId === 'all' ? 'unsorted' : boxId, order: Date.now(), scanned: info.scanned,
-        addedAt: Date.now(), lastOpened: 0, progress: 0, pos: null,
-      };
-      try { await R.db.batch([{ store: 'files', value: { id, bytes } }, { store: 'docs', value: meta }]); }
-      catch (e) { R.toast('导入未保存，可能空间不足：' + e.message, 'error', 5000); continue; }
-      docs.unshift(meta);
-      lastId = id;
-      renderSidebar();
-      aiTitle(meta, info); // 后台用 AI 重新总结标题（如已配置）
+      // Older records and ordinary HTTP origins can lack a SHA-256 digest.
+      const stored = await R.db.get('files', doc.id);
+      if (!stored?.bytes) continue;
+      const original = new Uint8Array(stored.bytes);
+      if (original.length === bytes.length && bytes.every((v, i) => v === original[i])) return doc;
     }
+  }
+
+  async function importOne(file, target) {
+    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') throw Error('请选择 PDF 格式的文件');
+    if (!file.size) throw Error('文件为空');
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const hash = globalThis.crypto?.subtle && await crypto.subtle.digest('SHA-256', bytes);
+    const digest = hash && Array.from(new Uint8Array(hash), n => n.toString(16).padStart(2, '0')).join('');
+    const existing = await findDuplicate(file, bytes, digest);
+    if (existing) return { status: 'existing', doc: existing };
+    const info = await analyze(bytes, file.name);
+    const id = R.uid('d');
+    const boxId = R.study.boxes().some(box => box.id === target) ? target : 'unsorted';
+    const meta = {
+      id, name: file.name, size: file.size, title: info.title, titleSource: 'local',
+      pageCount: info.pageCount, thumb: info.thumb, thumb2x: info.thumb, tone: info.tone,
+      aspect: info.aspect, scanned: info.scanned, digest, boxId, order: Date.now(),
+      addedAt: Date.now(), lastOpened: 0, progress: 0, pos: null,
+    };
+    await R.db.batch([{ store: 'files', value: { id, bytes } }, { store: 'docs', value: meta }]);
+    docs.unshift(meta);
+    return { status: 'added', doc: meta };
+  }
+
+  function importError(error) {
+    if (error.name === 'QuotaExceededError') return '浏览器本地存储空间不足';
+    if (error.name === 'PasswordException') return 'PDF 需要密码，请导入已解锁的副本';
+    if (error.name === 'InvalidPDFException') return 'PDF 已损坏或格式无效';
+    if (/worker/i.test(error.message)) return 'PDF 解析器未能启动：' + error.message;
+    if (error instanceof RangeError) return '文件处理超出当前浏览器容量：' + error.message;
+    return error.message || String(error);
+  }
+
+  async function importFiles(fileList, boxId = R.study.state.boxFilter, notify) {
+    const files = Array.from(fileList);
+    let lastId = null;
+    for (const [index, file] of files.entries()) {
+      notify?.({ status: 'reading', file, index, total: files.length });
+      let outcome;
+      try { outcome = await importOne(file, boxId); }
+      catch (error) { outcome = { status: 'failed', reason: importError(error) }; }
+      if (outcome.doc) lastId = outcome.doc.id;
+      if (notify) notify({ ...outcome, file });
+      else if (outcome.reason) R.toast(file.name + '：' + outcome.reason, 'error', 6000);
+    }
+    if (lastId) renderSidebar();
     return lastId;
   }
 
   /** 解析：页数、缩略图、首页文字、离线标题 */
   async function analyze(bytes, fileName) {
-    const pdf = await pdfjsLib.getDocument({
-      data: bytes.slice(0), cMapUrl: R.PDFJS.cmaps, cMapPacked: true, standardFontDataUrl: R.PDFJS.fonts,
-    }).promise;
+    const pdf = await R.viewer.loadPdf(bytes).promise;
     try {
       const page = await pdf.getPage(1);
       const vp1 = page.getViewport({ scale: 1 });
@@ -96,28 +122,12 @@ R.library = (() => {
         } catch { /* */ }
       }
       return {
-        pageCount: pdf.numPages, thumb, tone, aspect: vp1.width / vp1.height, text: text.trim(), scanned: text.trim().length < 15,
+        pageCount: pdf.numPages, thumb, tone, aspect: vp1.width / vp1.height, scanned: text.trim().length < 15,
         title: R.core.summarizeTitle(candidates, fileName),
       };
     } finally {
-      pdf.destroy();
+      await pdf.destroy();
     }
-  }
-
-  async function aiTitle(meta, info) {
-    if (!R.settings.aiTitle || !R.ai.isReady()) return;
-    if (!info.text && !R.ai.supportsVision()) return;
-    try {
-      const t = await R.ai.summarizeTitle({ text: info.text, image: info.text ? null : info.thumb, fallback: meta.title });
-      const current = get(meta.id);
-      if (current && t && t !== current.title && current.titleSource !== 'user') {
-        current.title = t;
-        current.titleSource = 'ai';
-        await update(current);
-        renderSidebar();
-        R.bus.emit('doc-updated', current);
-      }
-    } catch (e) { console.warn('AI 标题失败：', e.message); }
   }
 
   async function update(meta) {
@@ -138,12 +148,19 @@ R.library = (() => {
 
   async function remove(id) {
     const m = get(id);
-    if (!m || !await R.confirm(`移除「${m.title}」？标注和对话记录也会删除，原文件不受影响。`, '移除这本书')) return;
+    if (!m || !await R.confirm(`移除「${m.title}」？可在书库底部恢复，PDF、标注和对话会保留在此设备。`, '移除这本书')) return;
     if (currentId === id) await R.app.route('home');
-    await R.db.batch(['docs', 'files', 'annots', 'chats'].map(store => ({ store, del: true, value: id })));
+    const removed=await R.db.kvGet('removedBooks',[]);
+    await R.db.batch([{store:'docs',del:true,value:id},{store:'kv',value:{key:'removedBooks',value:[...removed,structuredClone(m)]}}]);
     docs = docs.filter((d) => d.id !== id);
     renderSidebar();
     if (!R.$('#homeView').classList.contains('hidden')) renderHome();
+  }
+  async function restoreRemoved(id){
+    const removed=await R.db.kvGet('removedBooks',[]),doc=removed.find(d=>d.id===id);if(!doc||get(id))return;
+    if(!R.study.boxes().some(b=>b.id===doc.boxId))doc.boxId='unsorted';
+    await R.db.batch([{store:'docs',value:doc},{store:'kv',value:{key:'removedBooks',value:removed.filter(d=>d.id!==id)}}]);
+    docs.unshift(doc);renderSidebar();await renderHome();R.toast('书籍和阅读记录已恢复');
   }
 
   /* ---------------- 侧栏 ---------------- */
@@ -161,5 +178,5 @@ R.library = (() => {
   /* ---------------- 主页 ---------------- */
   async function renderHome() { return R.study.renderLibrary(); }
 
-  return { load, get, all: () => docs, importFiles, update, rename, remove, renderSidebar, renderHome, setCurrent, abbr, current: () => currentId };
+  return { load, get, all: () => docs, importFiles, update, rename, remove, restoreRemoved, renderSidebar, renderHome, setCurrent, abbr, current: () => currentId };
 })();

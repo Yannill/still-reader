@@ -133,12 +133,20 @@ R.translate = (() => {
     return out;
   }
 
-  /** 翻译专注框所在的当前行（快捷键 T） */
+  /** 翻译当前选区或专注框所在内容（快捷键 T / 底部工具栏「翻译」） */
   function current() {
-    const cur = R.focus.current();
-    if (!cur) return R.toast('先打开专注模式（F），再按 T 翻译当前行');
-    const l = cur.line;
-    show({ i: cur.i, rects: [{ x: l.x, y: l.y, w: l.w, h: l.h }], text: l.text, scanned: !l.text });
+    const sel = R.annot.selectionInfo();
+    if (sel) {
+      R.hide(R.$('#selPopover'));
+      return show(sel);
+    }
+    if (R.focus?.isOn?.()) {
+      const payload = R.focus.activePayload?.();
+      if (payload && (payload.text || payload.rects?.length)) {
+        return show({ ...payload, scanned: payload.scanned || !payload.text });
+      }
+    }
+    R.toast('请先选中文字，或开启专注模式（F）后再点翻译');
   }
 
   return { init, show, current };

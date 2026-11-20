@@ -70,7 +70,11 @@ R.toast = (msg, type = 'info', ms = 2600) => {
 R.DEFAULT_SETTINGS = {
   // 专注
   focusOn: true,
-  focusLines: 1,
+  focusMode: 'line',
+  readingContent: 'body',
+  focusHover: false,
+  readerSidebarOpen: false,
+  readerSidebarTab: 'outline',
   lensSize: 'comfort',
   dim: 0.62,
   blur: false,
@@ -95,7 +99,6 @@ R.DEFAULT_SETTINGS = {
     proxy: '', // 例如 http://localhost:8080/api/ai/chat （C++ 服务器提供）
     vision: true,
   },
-  aiTitle: true, // 导入时用 AI 自动起标题
   calmChrome: true, // 专注时自动淡出工具栏
 };
 
@@ -103,6 +106,8 @@ R.settings = (() => {
   let s;
   try { s = JSON.parse(localStorage.getItem('adhd-reader-settings') || '{}'); } catch { s = {}; }
   const merged = Object.assign({}, R.DEFAULT_SETTINGS, s);
+  delete merged.focusLines;
+  if (!['line', 'window'].includes(merged.focusMode)) merged.focusMode = 'line';
   merged.ai = Object.assign({}, R.DEFAULT_SETTINGS.ai, s.ai || {});
   return merged;
 })();

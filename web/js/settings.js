@@ -20,9 +20,8 @@ R.settingsUI = (() => {
         <div class="set-row"><label>API Key</label><input type="password" id="sKey" value="${R.esc(ai.apiKey)}" placeholder="只保存在本机浏览器里" /></div>
         <div class="set-row"><label>代理地址</label><input type="text" id="sProxy" value="${R.esc(ai.proxy)}" placeholder="可选，如 http://localhost:8080/api/ai/chat" /></div>
         <div class="set-note">浏览器直连可能受跨域限制。当前本地服务只提供静态网页；代理需要另行部署，再填写地址。Key 仅保存在此浏览器的本地设置中。</div>
-        <div class="set-row"><label>支持图片</label><label class="switch"><input type="checkbox" id="sVision" ${ai.vision ? 'checked' : ''}/><i></i></label>
-          <span style="color:var(--muted);font-size:12px">扫描版 PDF 的翻译 / 提问需要</span></div>
-        <div class="set-row"><label></label><button class="chip ghost" id="sTest">测试连接</button><span id="sTestRes" style="font-size:12px;color:var(--muted)"></span></div>
+        <div class="set-row"><label>支持图片</label><div class="set-inline"><label class="switch"><input type="checkbox" id="sVision" ${ai.vision ? 'checked' : ''}/><i></i></label><span class="set-hint">扫描版 PDF 的翻译 / 提问需要</span></div></div>
+        <div class="set-row"><label></label><div class="set-inline"><button class="chip ghost" id="sTest">测试连接</button><span id="sTestRes" class="set-hint"></span></div></div>
       </div>
       <div class="set-group">
         <h4>翻译</h4>
@@ -32,16 +31,8 @@ R.settingsUI = (() => {
       </div>
       <div class="set-group">
         <h4>阅读习惯</h4>
-        <div class="set-row"><label>番茄钟</label><input type="number" id="sPomo" min="5" max="90" value="${s.pomodoro}" style="max-width:90px"/> 分钟专注
-          <input type="number" id="sBreak" min="1" max="30" value="${s.breakMin}" style="max-width:80px"/> 分钟休息</div>
-        <div class="set-row"><label>安静模式</label><label class="switch"><input type="checkbox" id="sCalm" ${s.calmChrome ? 'checked' : ''}/><i></i></label>
-          <span style="color:var(--muted);font-size:12px">专注时 3 秒不动鼠标，工具栏自动淡出</span></div>
-        <div class="set-row"><label>AI 起标题</label><label class="switch"><input type="checkbox" id="sAiTitle" ${s.aiTitle ? 'checked' : ''}/><i></i></label>
-          <span style="color:var(--muted);font-size:12px">导入时发送前文片段或首页图像至所选服务，生成简短标题；关闭后使用离线算法</span></div>
-      </div>
-      <div class="set-group">
-        <h4>关于</h4>
-        <div class="set-note" style="margin:0">行检测 / 标题算法：${R.core.hasWasm() ? '<b style="color:var(--done)">WebAssembly 核心</b>' : '本地 JavaScript 核心（当前交付未包含可选 WASM）'}</div>
+        <div class="set-row"><label>番茄钟</label><div class="set-pomo"><input type="number" id="sPomo" min="5" max="90" value="${s.pomodoro}"/><span>分钟专注</span><input type="number" id="sBreak" min="1" max="30" value="${s.breakMin}"/><span>分钟休息</span></div></div>
+        <div class="set-note">导入 PDF 时默认在本机自动提取书名，阅读进度与标注仅保存在当前浏览器本地。</div>
       </div>`;
 
     const $ = (id) => R.$('#' + id);
@@ -66,8 +57,6 @@ R.settingsUI = (() => {
     $('sVision').onchange = (e) => { ai.vision = e.target.checked; save(); };
     $('sPomo').onchange = (e) => { s.pomodoro = R.clamp(+e.target.value || 25, 5, 90); save(); };
     $('sBreak').onchange = (e) => { s.breakMin = R.clamp(+e.target.value || 5, 1, 30); save(); };
-    $('sCalm').onchange = (e) => { s.calmChrome = e.target.checked; save(); };
-    $('sAiTitle').onchange = (e) => { s.aiTitle = e.target.checked; save(); };
     const eng = $('sEngine');
     const syncEng = () => R.$$('button', eng).forEach((b) => b.classList.toggle('on', b.dataset.v === s.translateEngine));
     eng.onclick = (e) => { const b = e.target.closest('button'); if (b) { s.translateEngine = b.dataset.v; save(); syncEng(); } };

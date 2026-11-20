@@ -10,19 +10,16 @@
   <!-- 第三方库：pdf.js 3.11（渲染/文字层）+ pdf-lib 1.17（把标注写回 PDF）
        优先用本地 vendor/（离线可用），缺失时自动改用 CDN -->
   <script src="vendor/pdfjs/build/pdf.min.js"></script>
-  <script>window.__pdfLocal = !!window.pdfjsLib; window.pdfjsLib || document.write('<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"><\/script>')</script>
   <script src="vendor/pdf-lib.min.js"></script>
   <script>window.PDFLib || document.write('<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"><\/script>')</script>
   <script>
     // 直接双击 index.html（file://）时浏览器禁止加载 Worker，改为主线程解析
-    if (location.protocol === 'file:' && window.pdfjsLib) document.write('<script src="vendor/pdfjs/build/pdf.worker.min.js"><\/script>');
+    if (location.protocol === 'file:') document.write('<script src="vendor/pdfjs/build/pdf.worker.min.js"><\/script>');
   </script>
-  <!-- 可选：C++ 编译出的 WebAssembly 核心（不存在时自动使用 JS 版同算法） -->
-  <script src="wasm/reader_core.js" onerror="window.__noWasm = true"></script>
 </head>
 <body>
 <div id="app" class="app">
-  <header class="top-nav"><button class="wordmark" data-route="home" aria-label="静读，返回书库">Still Reader<span>静读</span></button><nav aria-label="主导航"><button data-route="home" class="active">书库 <em>Library</em></button><button data-route="notes">笔记 <em>Notes</em></button><button data-route="focus">专注 <em>Focus</em></button></nav><div class="nav-actions"><label class="search-field"><span>搜索</span><input type="search" id="librarySearch" placeholder="书名、文件或收纳盒" aria-label="搜索书库"></label><button id="topImport" class="import-text">＋ 导入</button><button id="topSettings">设置</button></div></header>
+  <header class="top-nav"><button class="wordmark" data-route="home" aria-label="Still Reader，返回书库">Still Reader</button><nav aria-label="主导航"><button data-route="home" class="active">书库 <em>Library</em></button><button data-route="notes">笔记 <em>Notes</em></button><button data-route="focus">专注 <em>Focus</em></button></nav><div class="nav-actions"><label class="search-field"><svg class="nav-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>搜索</span><input type="search" id="librarySearch" placeholder="书名、文件或收纳盒" aria-label="搜索书库"></label><button id="topImport" class="import-text">导入 PDF</button><button id="topSettings" class="top-settings-btn"><svg class="nav-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1.02 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg><span>设置</span></button></div></header>
 
   <!-- ============ 左侧栏：简短中文标题 ============ -->
   <nav id="sidebar" class="sidebar">
@@ -32,7 +29,7 @@
       <button id="btnCollapse" class="icon-btn collapse-btn" title="收起 / 展开侧栏">‹</button>
     </div>
 
-    <button id="btnImport" class="import-btn"><span class="plus">＋</span><span class="nav-label">导入 PDF</span></button>
+    <button id="btnImport" class="import-btn"><span class="nav-label">导入 PDF</span></button>
     <input id="fileInput" type="file" accept="application/pdf,.pdf" multiple hidden />
 
     <a class="nav-item" id="navHome" data-route="home">
@@ -43,9 +40,18 @@
     <div id="docList" class="doc-list"></div>
 
     <div class="sidebar-foot">
-      <a class="nav-item" id="navParking"><span class="nav-abbr">杂念</span><span class="nav-label">杂念停车场</span></a>
-      <a class="nav-item" id="navSettings"><span class="nav-abbr">设置</span><span class="nav-label">设置</span></a>
-      <a class="nav-item" id="navHelp"><span class="nav-abbr">帮助</span><span class="nav-label">快捷键</span></a>
+      <a class="nav-item" id="navParking" title="杂念停车场 (快捷键 N)">
+        <svg class="rail-foot-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        <span class="nav-abbr">杂念</span><span class="nav-label">杂念停车场</span>
+      </a>
+      <a class="nav-item" id="navSettings" title="系统与 AI 设置">
+        <svg class="rail-foot-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1.02 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+        <span class="nav-abbr">设置</span><span class="nav-label">设置</span>
+      </a>
+      <a class="nav-item" id="navHelp" title="快捷键说明 (?)">
+        <svg class="rail-foot-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
+        <span class="nav-abbr">帮助</span><span class="nav-label">快捷键</span>
+      </a>
     </div>
   </nav>
 
@@ -57,44 +63,84 @@
     <section id="readerView" class="view reader-view hidden">
       <header class="reader-top" id="readerTop">
         <div class="progress-line"><div id="progressFill" class="progress-fill"></div></div>
-        <button id="readerHome" class="reader-home">← 书库</button><div class="rt-left"><span id="readerBox" class="eyebrow"></span>
-          <div id="docTitle" class="doc-title" title="双击重命名"></div>
-          <div id="docMeta" class="doc-meta"></div>
-        </div>
-        <div class="page-navigation"><button id="prevPage" title="上一页" aria-label="上一页">‹</button><input id="pageInput" type="number" min="1" value="1" aria-label="跳转到页码"><span id="pageTotal">/ 000</span><button id="nextPage" title="下一页" aria-label="下一页">›</button></div><div class="rt-right">
-          <div class="split-chip">
-            <button id="btnFocus" class="chip toggle" title="专注模式 (F)">专注</button>
-            <button id="btnFocusOpts" class="chip caret" title="阅读设置">Aa<span class="hidden"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+        <div class="rt-brand-doc">
+          <button id="readerHome" class="reader-home" title="返回书库首页">← 书库</button>
+          <div class="rt-left">
+            <span id="readerBox" class="eyebrow"></span>
+            <div id="docTitle" class="doc-title" title="双击重命名"></div>
+            <div id="docMeta" class="doc-meta"></div>
           </div>
-          <button id="btnNextLine" class="chip" title="下一行">下一行 ↓</button><button id="btnPace" class="chip" title="自动步进：按你的速度自动走到下一行 (P)">步进</button>
+        </div>
+
+        <div class="rt-view-group" aria-label="翻页与视图比例">
+          <div class="page-navigation" title="页码跳转">
+            <button id="prevPage" title="上一页" aria-label="上一页">‹</button>
+            <input id="pageInput" type="number" min="1" value="1" aria-label="跳转到页码">
+            <span id="pageTotal">/ 000</span>
+            <button id="nextPage" title="下一页" aria-label="下一页">›</button>
+          </div>
+          <div class="aa-zoom rt-zoom-pod" aria-label="缩放控制">
+            <button class="icon-btn" id="btnZoomOut" title="缩小 (Ctrl -)">−</button>
+            <span id="zoomLabel" class="zoom-label">100%</span>
+            <button class="icon-btn" id="btnZoomIn" title="放大 (Ctrl +)">＋</button>
+            <button class="chip ghost" id="btnFit" title="适应页面宽度">适宽</button>
+            <button class="chip ghost" id="btnFitPage" title="整页显示">整页</button>
+          </div>
+          <select id="paperSelect" class="rt-paper-select" aria-label="纸张主题" title="切换纸张底色">
+            <option value="original">原色纸</option>
+            <option value="warm">暖宣纸</option>
+            <option value="gray">素灰纸</option>
+          </select>
+        </div>
+
+        <div class="rt-right">
+          <div class="rt-focus-pod" aria-label="专注玻璃框控制">
+            <button id="btnFocus" class="chip toggle" title="开启 / 关闭专注玻璃框 (F)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="3"/><path d="M7 12h10"/></svg>
+              <span>专注</span>
+            </button>
+            <select id="focusModeControl" aria-label="玻璃框模式" title="选择玻璃框聚焦模式">
+              <option value="line">逐行阅读</option>
+              <option value="window">自由玻璃窗</option>
+            </select>
+            <button id="btnPace" class="chip" title="自动步进：按阅读速度自动推进 (P)">步进</button>
+            <button id="btnFocusOpts" class="chip caret" title="玻璃框与阅读微调">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+              <span>设置</span>
+            </button>
+          </div>
+
           <button id="btnTimer" class="chip timer" title="番茄钟 (点击开始/暂停)">
             <svg viewBox="0 0 36 36" class="timer-ring"><circle cx="18" cy="18" r="15" class="ring-bg"/><circle cx="18" cy="18" r="15" class="ring-fg" id="timerRing"/></svg>
             <span id="timerLabel">25:00</span>
           </button>
-          <button id="btnOutline" class="chip">目录</button><button id="btnAnnotPanel" class="chip" title="打开批注栏 (B)">批注 <b id="annotCount">0</b></button>
-          <button id="btnChat" class="chip accent" title="问 AI (A)">问 AI</button>
+
+          <div class="rt-drawer-pod" aria-label="导航与批注侧栏">
+            <button id="btnOutline" class="chip" title="打开目录导航">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              <span>目录</span>
+            </button>
+            <button id="btnAnnotPanel" class="chip" title="打开批注栏 (B)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <span>批注</span> <b id="annotCount">0</b>
+            </button>
+          </div>
         </div>
       </header>
 
       <!-- 专注框设置小面板 -->
-      <div id="focusOpts" class="popover focus-opts hidden"><div class="fo-title">阅读设置 <em>Reading</em></div><div class="fo-row"><span>纸张</span><select id="paperSelect" aria-label="纸张主题"><option value="original">PDF 原色</option><option value="warm">暖纸</option><option value="gray">灰纸</option></select></div><div class="fo-row"><span>显示比例</span><div class="aa-zoom">
-          <button class="icon-btn" id="btnZoomOut" title="缩小 (Ctrl -)">−</button>
-          <span id="zoomLabel" class="zoom-label">100%</span>
-          <button class="icon-btn" id="btnZoomIn" title="放大 (Ctrl +)">＋</button>
-          <button class="chip ghost" id="btnFit" title="适应宽度">适宽</button>
-        </div>
-        <button class="chip ghost" id="btnFitPage">整页</button></div><div class="fo-row"><span>专注</span><button class="chip ghost" id="aaFocus">开启 / 关闭</button></div>
-        <div class="fo-row"><span>聚焦行数</span>
-          <div class="seg" data-key="focusLines"><button data-v="1">1 行</button><button data-v="2">2 行</button><button data-v="3">3 行</button><button data-v="paragraph">整段</button></div>
-        </div>
-        <div class="fo-row"><span>玻璃框</span>
+      <div id="focusOpts" class="popover focus-opts hidden">
+        <div class="fo-title">玻璃框与阅读设置 <em>Focus & Lens</em></div>
+        <p class="focus-help">逐行阅读：与页面同宽的通栏玻璃框，滚轮或方向键推进；自由玻璃窗：可拖动框体移动，拖动四边或四角自由调整大小，拖至上下边缘自动翻页。</p>
+        <div class="fo-row"><span>玻璃框留白</span>
           <div class="seg" data-key="lensSize"><button data-v="compact">紧凑</button><button data-v="comfort">舒适</button><button data-v="airy">宽松</button></div>
         </div>
-        <div class="fo-row"><span>淡化强度</span><input type="range" id="dimRange" min="0.2" max="0.9" step="0.05" /></div>
-        <div class="fo-row"><span>未聚焦轻微模糊</span><label class="switch"><input type="checkbox" id="blurToggle" /><i></i></label></div>
-        <div class="fo-row"><span>步进速度</span><input type="range" id="paceRange" min="80" max="400" step="10" /><b id="paceLabel"></b></div>
+        <div class="fo-row"><span>周围淡化强度</span><input type="range" id="dimRange" min="0.2" max="0.9" step="0.05" /></div>
+        <div class="fo-row"><span>背景柔和虚化</span><label class="switch"><input type="checkbox" id="blurToggle" /><i></i></label></div>
+        <div class="fo-row"><span>阅读内容过滤</span><select id="readingContent" aria-label="逐行内容"><option value="body">正文优先（跳过页眉页码）</option><option value="all">全部文字</option></select></div>
+        <div class="fo-row"><span>自动步进速度</span><div class="fo-range-wrap"><input type="range" id="paceRange" min="80" max="400" step="10" /><b id="paceLabel"></b></div></div>
         <div class="fo-row"><span id="paceProgressLabel">显示步进进度条</span><label class="switch"><input id="paceProgressToggle" type="checkbox" aria-labelledby="paceProgressLabel" /><i></i></label></div>
-        <div class="fo-row"><span>减少动态</span><label class="switch"><input id="reduceMotion" type="checkbox"><i></i></label></div><button class="chip ghost" id="aaHelp">快捷键说明 →</button>
+        <div class="fo-row"><span>减少动态效果</span><label class="switch"><input id="reduceMotion" type="checkbox"><i></i></label></div>
       </div>
 
       <div class="reader-body">
@@ -102,28 +148,69 @@
           <div id="scroller" class="scroller"><div id="pages" class="pages"></div></div>
           <div id="focusLayer" class="focus-layer hidden">
             <div id="dim" class="dim"></div>
-            <div id="lens" class="lens"><i class="lens-accent"></i></div>
+            <div id="lens" class="lens">
+              <i class="lens-accent"></i>
+              <span class="lens-sheen" aria-hidden="true"></span>
+              <div class="lens-resize lens-edge" data-resize="n" role="separator" aria-label="调整玻璃框上边高度"></div>
+              <div class="lens-resize lens-edge" data-resize="s" role="separator" aria-label="调整玻璃框下边高度"></div>
+              <div class="lens-resize lens-edge" data-resize="w" role="separator" aria-label="调整玻璃框左边宽度"></div>
+              <div class="lens-resize lens-edge" data-resize="e" role="separator" aria-label="调整玻璃框右边宽度"></div>
+              <button type="button" class="lens-resize lens-corner" data-resize="nw" aria-label="调整玻璃框左上角"></button>
+              <button type="button" class="lens-resize lens-corner" data-resize="ne" aria-label="调整玻璃框右上角"></button>
+              <button type="button" class="lens-resize lens-corner" data-resize="sw" aria-label="调整玻璃框左下角"></button>
+              <button type="button" class="lens-resize lens-corner" data-resize="se" aria-label="调整玻璃框右下角"></button>
+            </div>
           </div>
           <div id="resumeHint" class="resume-hint hidden"></div>
 
           <!-- 底部工具栏 -->
-          <div id="toolbar" class="toolbar">
+          <div id="toolbar" class="toolbar" role="toolbar" aria-label="阅读与标注工具栏">
             <div class="tb-group" id="toolGroup">
-              <button class="tool on" data-tool="read" title="阅读：点哪行读哪行，选中文字可翻译 (1)">阅读</button>
-              <button class="tool" data-tool="highlight" title="高亮：在文字上横着拖动 (2)">高亮</button>
-              <button class="tool" data-tool="underline" title="下划线 (3)">下划线</button>
-              <button class="tool" data-tool="comment" title="评论：拖选后写想法 (4)">评论</button>
-              <button class="tool" data-tool="box" title="自由框选矩形区域">框选</button><button class="tool" data-tool="erase" title="擦除：点哪个标注删哪个 (5)">擦除</button>
+              <button class="tool on" data-tool="read" title="阅读：点哪行读哪行，选中文字可翻译 (1)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                <span>阅读</span>
+              </button>
+              <button class="tool" data-tool="highlight" title="高亮：在文字上横着拖动 (2)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
+                <span>高亮</span>
+              </button>
+              <button class="tool" data-tool="underline" title="下划线 (3)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4v6a6 6 0 0 0 12 0V4"/><line x1="4" y1="20" x2="20" y2="20"/></svg>
+                <span>下划线</span>
+              </button>
+              <button class="tool" data-tool="comment" title="评论：拖选后写想法 (4)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                <span>评论</span>
+              </button>
+              <button class="tool" data-tool="box" title="自由框选矩形区域">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="4 3"/></svg>
+                <span>框选</span>
+              </button>
+              <button class="tool" data-tool="erase" title="擦除：点哪个标注删哪个 (5)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>
+                <span>擦除</span>
+              </button>
             </div>
             <div class="tb-sep"></div>
             <div class="tb-group colors" id="colorGroup"></div>
             <div class="tb-sep"></div>
-            <button class="tool" id="btnUndo" title="撤销 (Ctrl+Z)">撤销</button>
-            <button class="btn-primary sm" id="btnSave" title="保存到 PDF (Ctrl+S)">保存 PDF</button>
+            <div class="tb-group tb-assist">
+              <button type="button" class="tool tool-assist" id="btnToolbarTranslate" title="翻译选中文字或当前聚焦内容 (T)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
+                <span>翻译</span>
+              </button>
+              <button type="button" class="tool tool-assist" id="btnToolbarAsk" title="向 AI 询问选中文字或当前内容 (A)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+                <span>问 AI</span>
+              </button>
+            </div>
+            <div class="tb-sep"></div>
+            <button class="tool" id="btnUndo" title="撤销上一步标注 (Ctrl+Z)">撤销</button>
+            <button class="btn-primary sm" id="btnSave" title="将标注写回并下载 PDF (Ctrl+S)">保存 PDF</button>
           </div>
         </div>
 
-        <aside id="outlinePanel" class="side-panel hidden"><div class="sp-head"><b>目录</b><button class="icon-btn" data-close="outlinePanel" aria-label="关闭目录">×</button></div><div class="drawer-tabs"><button data-drawer="outline" class="active">目录</button><button data-drawer="annot">批注</button><button data-drawer="chat">AI</button></div><div id="outlineList" class="outline-list"></div></aside>
+        <aside id="outlinePanel" class="side-panel reader-sidebar hidden" aria-label="目录导航"><div class="sp-head"><b>目录</b><button class="icon-btn" data-close="outlinePanel" aria-label="折叠目录">×</button></div><div id="outlineList" class="outline-list"></div></aside>
         <!-- 批注栏（默认关闭，按需在侧边打开一列） -->
         <aside id="annotPanel" class="side-panel hidden">
           <div class="sp-head">
@@ -170,7 +257,7 @@
 
 <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewTitle"><button id="previewBack" class="preview-back">← 返回书架 <span class="mono">ESC</span></button><div class="preview-layout"><div id="previewCover" class="preview-cover"></div><div class="preview-info"><span class="eyebrow">从书架，到眼前 / A CLOSER LOOK</span><h2 id="previewTitle" contenteditable="true" role="textbox" aria-label="编辑书名" spellcheck="false"></h2><p id="previewMeta" class="mono"></p><div class="preview-box-row"><span id="previewBox"></span><button id="previewMenu" aria-label="管理这本书">⋯</button></div><span class="eyebrow">你上次读到</span><blockquote id="previewQuote"></blockquote><div class="preview-actions"><button id="previewContinue" class="btn-primary">继续阅读 ↗</button><button id="previewStart">从头读</button></div><div id="previewLoading" class="preview-loading" aria-label="正在准备 PDF"></div></div></div></dialog>
 <dialog id="confirmDialog" class="dialog-sheet" aria-label="确认操作"><p id="confirmText"></p><div class="dialog-actions"><button id="confirmCancel">取消</button><button id="confirmOk" class="btn-primary danger">确认</button></div></dialog>
-<dialog id="boxDialog" class="dialog-sheet" aria-labelledby="boxDialogTitle"><form id="boxForm"><span class="eyebrow">ARCHIVE / 收纳</span><h2 id="boxDialogTitle">新收纳盒</h2><label>标签名称<input id="boxName" maxlength="24" required></label><div class="dialog-actions"><button type="button" id="boxDelete" class="danger">删除盒子</button><button type="button" data-dialog-close="boxDialog">取消</button><button class="btn-primary" type="submit">保存</button></div></form></dialog>
+<dialog id="boxDialog" class="dialog-sheet" aria-labelledby="boxDialogTitle"><form id="boxForm"><span class="eyebrow">ARCHIVE / 收纳</span><h2 id="boxDialogTitle">新收纳盒</h2><label>标签名称<input id="boxName" maxlength="24" required></label><div class="dialog-actions"><button type="button" id="boxDelete" class="danger">删除</button><button type="button" data-dialog-close="boxDialog">取消</button><button class="btn-primary" type="submit">保存</button></div></form></dialog>
 <dialog id="bookMenu" class="dialog-sheet" aria-labelledby="bookMenuTitle"><span class="eyebrow">BOOK / 管理</span><h2 id="bookMenuTitle"></h2><label>移动到收纳盒<select id="bookMove"></select></label><button id="bookRename" class="menu-action">编辑书名 →</button><button id="bookRemove" class="menu-action danger">移除这本书</button><button data-dialog-close="bookMenu" class="menu-action">关闭</button></dialog>
 <!-- 选中文字后的浮动菜单 -->
 <div id="selPopover" class="popover sel-popover hidden">
@@ -215,20 +302,18 @@
     <div class="modal-head"><b>快捷键 & 使用方法</b><button class="icon-btn" data-close="helpModal">×</button></div>
     <div class="modal-body help-body">
       <table>
-        <tr><td><kbd>滚轮</kbd> / <kbd>↓</kbd> / <kbd>空格</kbd></td><td>专注框下一行（滚轮向上 = 上一行）</td></tr>
-        <tr><td><kbd>↑</kbd></td><td>上一行</td></tr>
-        <tr><td>单击某行</td><td>专注框跳到那一行；再点当前行 = 下一行</td></tr>
-        <tr><td>双击单词</td><td>立即翻译，释义显示在该行下方</td></tr>
-        <tr><td><kbd>F</kbd></td><td>开/关专注模式</td></tr>
-        <tr><td><kbd>P</kbd></td><td>自动步进（按你的速度自动前进）</td></tr>
-        <tr><td><kbd>H</kbd> / <kbd>U</kbd> / <kbd>C</kbd></td><td>高亮 / 下划线 / 评论 当前行</td></tr>
-        <tr><td><kbd>T</kbd></td><td>翻译当前行</td></tr>
-        <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>切换工具：阅读/高亮/下划线/评论/擦除</td></tr>
-        <tr><td><kbd>N</kbd></td><td>杂念停车场：先记下来，别打断阅读</td></tr>
-        <tr><td><kbd>A</kbd> / <kbd>B</kbd></td><td>打开 AI 助手 / 批注栏</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>保存 PDF / 撤销</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+滚轮</td><td>缩放</td></tr>
-        <tr><td><kbd>Shift</kbd>+滚轮</td><td>专注模式下也可以普通滚动页面</td></tr>
+        <tr><td><kbd>滚轮</kbd> / <kbd>↓</kbd> / <kbd>空格</kbd></td><td>玻璃框精准下移一行（滚轮向上 / <kbd>↑</kbd> 上移一行）</td></tr>
+        <tr><td><kbd>PageDown</kbd> / <kbd>PageUp</kbd></td><td>自由玻璃窗大跨度翻窗（非专注时翻页）</td></tr>
+        <tr><td>自由玻璃窗拖拽</td><td>拖动框体移动，拖动四边或四角调大小，拖至边缘自动翻页</td></tr>
+        <tr><td>单击某行 / 双击单词</td><td>单击跳到该行；双击单词立即就地翻译</td></tr>
+        <tr><td><kbd>F</kbd> / <kbd>P</kbd></td><td>开/关专注玻璃框 · 开/关自动步进</td></tr>
+        <tr><td><kbd>T</kbd> / 底部「翻译」</td><td>翻译选中文字或当前玻璃框内容</td></tr>
+        <tr><td><kbd>A</kbd> / 底部「问 AI」</td><td>打开 AI 助手并附带选中或聚焦内容</td></tr>
+        <tr><td><kbd>H</kbd> / <kbd>U</kbd> / <kbd>C</kbd></td><td>高亮 / 下划线 / 评论 当前聚焦行</td></tr>
+        <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>切换工具：阅读 / 高亮 / 下划线 / 评论 / 擦除</td></tr>
+        <tr><td><kbd>B</kbd> / <kbd>N</kbd></td><td>打开批注栏 / 打开杂念停车场</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>保存 PDF / 撤销标注</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+滚轮 / <kbd>Shift</kbd>+滚轮</td><td>缩放页面 / 专注模式下临时自由滚动</td></tr>
       </table>
     </div>
   </div>
@@ -248,6 +333,10 @@
 </div>
 
 <div id="dropOverlay" class="drop-overlay hidden"><div>松手，放上书架</div></div>
+<aside id="importPanel" aria-label="PDF 导入记录" hidden>
+  <div class="import-report-head"><strong id="importSummary" role="status"></strong><button id="importDismiss" type="button">关闭</button></div>
+  <ul id="importResults"></ul>
+</aside>
 <div id="toasts" class="toasts"></div>
 
 <script src="js/util.js"></script>
@@ -255,6 +344,7 @@
 <script src="js/core.js"></script>
 <script src="js/ai.js"></script>
 <script src="js/viewer.js"></script>
+<script src="js/text-model.js"></script>
 <script src="js/focus.js"></script>
 <script src="js/pdfsave.js"></script>
 <script src="js/annotate.js"></script>

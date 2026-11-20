@@ -8,6 +8,10 @@ node_modules/
 # Build output, deployment state and coverage
 dist/
 build/
+!/web/vendor/pdfjs/build/
+!/web/vendor/pdfjs/build/pdf.min.js
+!/web/vendor/pdfjs/build/pdf.worker.min.js
+!/web/vendor/pdfjs/build/pdf.worker.mjs
 out/
 coverage/
 .vercel/
@@ -57,9 +61,13 @@ __pycache__/
 # Personal documents and local data; retain only the bundled test PDF
 *.pdf
 !/web/samples/sample.pdf
+!/web/design-preview/typography/fonts/MiSans-License.pdf
 /uploads/
 /private/
 /backups/
+/backup_before_cleanup/
+/最新网站代码审阅/
+/web/assets/
 *.db
 *.sqlite
 *.sqlite3
