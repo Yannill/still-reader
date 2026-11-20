@@ -2507,6 +2507,214 @@ body.calm-idle .toolbar {
   background-image: none;
 }
 
+/* ============ 云同步账号按钮、弹层与登录/注册弹窗 ============ */
+.account-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(31, 28, 25, .15);
+  background: rgba(255, 255, 255, .66);
+  color: var(--ink);
+  font: 500 13px/1 var(--font);
+  white-space: nowrap;
+  transition: background .16s, border-color .16s, box-shadow .16s;
+}
+.account-btn:hover {
+  background: #FFFFFF;
+  border-color: rgba(31, 28, 25, .30);
+  color: var(--ink);
+  box-shadow: 0 3px 10px -4px rgba(24, 20, 16, .16);
+}
+.account-btn.signed-in {
+  padding: 0 12px 0 6px;
+  background: #FCFBF8;
+  border-color: rgba(31, 28, 25, .18);
+}
+.acct-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #1F1C19;
+  color: #FAF8F3;
+  font: 600 12px/24px var(--font);
+  font-style: normal;
+  text-align: center;
+  flex: none;
+}
+.acct-name {
+  font: 500 12.5px/1 var(--font);
+  color: var(--ink);
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acct-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6F8B63;
+  text-decoration: none;
+  flex: none;
+}
+.account-btn.syncing .acct-dot {
+  background: #B88B4A;
+  animation: acctPulse 1s ease-in-out infinite;
+}
+.account-btn.sync-err .acct-dot {
+  background: var(--danger);
+}
+@keyframes acctPulse {
+  50% { opacity: .35; }
+}
+
+.account-pop {
+  width: 248px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(252, 250, 246, .96);
+  backdrop-filter: blur(18px) saturate(1.1);
+  border: 1px solid rgba(31, 28, 25, .14);
+  box-shadow: 0 20px 44px -14px rgba(20, 17, 14, .28), inset 0 1px 0 #FFFFFF;
+}
+.acct-head {
+  padding: 2px 4px 10px;
+  border-bottom: 1px solid rgba(31, 28, 25, .08);
+  margin-bottom: 8px;
+}
+.acct-head strong {
+  display: block;
+  font: 600 13px/1.4 var(--font);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acct-head span {
+  display: block;
+  margin-top: 3px;
+  font: 400 11.5px/1.4 var(--font);
+  color: var(--ink-3);
+}
+.acct-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.acct-actions button {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  text-align: left;
+  font: 500 12.5px/1 var(--font);
+  color: var(--ink-2);
+  transition: background .15s, color .15s;
+}
+.acct-actions button:hover {
+  background: rgba(31, 28, 25, .07);
+  color: var(--ink);
+}
+.acct-actions button.danger {
+  color: var(--danger);
+}
+.acct-actions button.danger:hover {
+  background: rgba(165, 82, 63, .10);
+  color: var(--danger);
+}
+
+.auth-card {
+  width: min(420px, 92vw);
+}
+.auth-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(31, 28, 25, .07);
+}
+.auth-tabs button {
+  height: 32px;
+  border-radius: 7px;
+  font: 500 13px/1 var(--font);
+  color: var(--ink-2);
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.auth-tabs button.on {
+  background: #FFFFFF;
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(24, 20, 16, .13);
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.auth-form label span {
+  font: 500 12.5px/1.3 var(--font);
+  color: var(--ink-2);
+}
+.auth-form input {
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(31, 28, 25, .18);
+  background: #FFFFFF;
+  font: 400 13.5px/1.3 var(--font);
+  color: var(--ink);
+  transition: border-color .15s, box-shadow .15s;
+}
+.auth-form input:focus {
+  border-color: #1F1C19;
+  box-shadow: 0 0 0 3px rgba(31, 28, 25, .08);
+  outline: none;
+}
+.auth-err {
+  margin: 0;
+  min-height: 18px;
+  font: 400 12.5px/1.5 var(--font);
+  color: var(--danger);
+}
+.auth-err:empty {
+  display: none;
+}
+.auth-submit {
+  height: 40px;
+  border-radius: 10px;
+  font: 600 13.5px/1 var(--font);
+  background: #1F1C19;
+  border-color: #1F1C19;
+  color: #FAF8F3;
+}
+.auth-submit:hover:not(:disabled) {
+  background: #35312C;
+}
+.auth-submit:disabled {
+  opacity: .6;
+  cursor: wait;
+}
+.auth-note {
+  margin: 2px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(31, 28, 25, .045);
+  font: 400 12px/1.6 var(--font);
+  color: var(--ink-2);
+}
+
 /* ============ 减少动态效果：保留 150ms 轻柔过渡，不死板瞬移 ============ */
 body.reduce-motion .folder,
 body.reduce-motion .folder-front,
@@ -2545,7 +2753,8 @@ body.reduce-motion .folder:focus-within {
 @media(max-width:480px){
   .top-nav { padding-inline: 8px; gap: 6px; }
   .top-nav nav button { padding-inline: 6px; font-size:12px; }
-  .top-nav .wordmark { font-size:18px; }
+  .top-nav .wordmark { font-size:24px; }
   .resume-copy small { font-size:11px; }
-  .search-field .nav-ico, .top-settings-btn .nav-ico { display:none; }
+  .search-field .nav-ico, .top-settings-btn .nav-ico, .account-btn .nav-ico { display:none; }
+  .account-btn { height: 32px; padding: 0 9px; font-size: 11.5px; }
 }

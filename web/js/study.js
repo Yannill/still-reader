@@ -226,7 +226,9 @@ R.study = (() => {
     if(prepared?.id===id)return prepared.promise;
     discardPrepared(); const entry={id,task:null}; prepared=entry;
     entry.promise=(async()=>{
-      const file=await R.db.get('files',id); if(!file)throw Error('文件数据丢失，请重新导入');
+      let file=await R.db.get('files',id);
+      if(!file) file = await R.cloud?.downloadPdf?.(id);
+      if(!file)throw Error('文件数据丢失，请重新导入');
       if(prepared!==entry)throw new DOMException('预览已取消','AbortError');
       entry.task=R.viewer.loadPdf(file.bytes);
       const pdf=await entry.task.promise; return {file,pdf};
@@ -352,5 +354,8 @@ R.study = (() => {
     R.$('#focusView').innerHTML=`<div class="journal focus-journal"><span class="eyebrow">03 / FOCUS</span><h1>一点一点，读下去 <em>Focus</em></h1><p class="focus-intro">不必赶路。今天的每一行，都算数。</p><div class="focus-numbers">${[[today.lines,'今天读过的行','行'],[today.minutes,'专注时长','分钟'],[today.streak,'连续阅读','天']].map(([n,l,u])=>`<div class="focus-stat"><strong>${String(n).padStart(2,'0')}<em>${u}</em></strong><span>${l}</span></div>`).join('')}</div><div class="focus-chart-card"><div class="chart-head eyebrow">最近 14 天 · 每日阅读行数</div><div class="focus-chart" role="img" aria-label="近14天每日阅读行数：${days.map(d=>d.key+' '+d.lines+'行').join('，')}">${days.map(d=>`<div class="${d.lines?'has-data':'is-zero'}" title="${d.key}：${d.lines} 行">${d.lines?`<i class="bar-val">${d.lines}</i>`:''}<span style="height:${d.lines?Math.max(10,Math.round(d.lines/max*100)):3}%"></span><small>${d.key.slice(8)}</small></div>`).join('')}</div></div><div class="focus-resume-bar">${last?`<button class="btn-primary" id="focusResume">从上次停下的地方开始 ↗</button><span class="focus-last-doc mono">${esc(last.title)} · 第 ${(last.pos?.i||0)+1} 页</span>`:'<button class="btn-primary" id="focusLibrary">到书库选一本书 →</button>'}</div></div>`;
     if(last)R.$('#focusResume').onclick=()=>direct(last.id);else R.$('#focusLibrary').onclick=()=>R.app.route('home');
   }
-  return { init,openFolder,closeFolder,reorderBox,state,renderLibrary,renderNotes,renderFocus,boxName,boxes:()=>boxes,recent,move,preview,closePreview,direct,prepare,takePrepared,saveView:()=>saveView.flush(),finishMotion,readerEntered,returnToShelf };
+  async function reloadBoxes() {
+    boxes = (await R.db.all('boxes')).sort((a, b) => a.order - b.order);
+  }
+  return { init,reloadBoxes,openFolder,closeFolder,reorderBox,state,renderLibrary,renderNotes,renderFocus,boxName,boxes:()=>boxes,recent,move,preview,closePreview,direct,prepare,takePrepared,saveView:()=>saveView.flush(),finishMotion,readerEntered,returnToShelf };
 })();

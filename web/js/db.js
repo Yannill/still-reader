@@ -8,7 +8,12 @@
 'use strict';
 R.db = (() => {
   let dbp = null;
+  let silent = false;
   const STORES = { docs: 'id', files: 'id', annots: 'id', chats: 'id', kv: 'key', boxes: 'id' };
+
+  function notify(events) {
+    if (!silent && events?.length) R.cloud?.onLocalChange?.(events);
+  }
 
   function open() {
     if (dbp) return dbp;
@@ -44,32 +49,56 @@ R.db = (() => {
   }
 
   return {
+    async runSilent(fn) {
+      const prev = silent;
+      silent = true;
+      try { return await fn(); } finally { silent = prev; }
+    },
     async batch(operations) {
       const d = await open();
-      return new Promise((resolve, reject) => {
+      await new Promise((resolve, reject) => {
         const t = d.transaction([...new Set(operations.map(o => o.store))], 'readwrite');
         operations.forEach(o => t.objectStore(o.store)[o.del ? 'delete' : 'put'](o.value));
         t.oncomplete = () => resolve();
         t.onerror = t.onabort = () => reject(t.error || new Error('存储事务未完成'));
       });
+      notify(operations.map(o => ({
+        store: o.store,
+        del: !!o.del,
+        id: o.del ? o.value : o.value?.id,
+        key: o.store === 'kv' ? (o.del ? o.value : o.value?.key) : undefined,
+      })));
     },
     // Merge progress atomically with changes made in other tabs.
-    patchDoc(id, fields) {
-      return run('docs', 'readwrite', store => {
+    async patchDoc(id, fields) {
+      await run('docs', 'readwrite', store => {
         const request = store.get(id);
         request.onsuccess = () => {
           if (request.result) store.put({ ...request.result, ...fields });
         };
       });
+      notify([{ store: 'docs', del: false, id }]);
     },
     get: (store, key) => run(store, 'readonly', (s) => s.get(key)),
     all: (store) => run(store, 'readonly', (s) => s.getAll()),
-    put: (store, val) => run(store, 'readwrite', (s) => s.put(val)),
-    del: (store, key) => run(store, 'readwrite', (s) => s.delete(key)),
+    async put(store, val) {
+      const res = await run(store, 'readwrite', (s) => s.put(val));
+      notify([{ store, del: false, id: val?.id, key: store === 'kv' ? val?.key : undefined }]);
+      return res;
+    },
+    async del(store, key) {
+      const res = await run(store, 'readwrite', (s) => s.delete(key));
+      notify([{ store, del: true, id: key, key: store === 'kv' ? key : undefined }]);
+      return res;
+    },
     async kvGet(key, def) {
       const r = await run('kv', 'readonly', (s) => s.get(key));
       return r ? r.value : def;
     },
-    kvSet: (key, value) => run('kv', 'readwrite', (s) => s.put({ key, value })),
+    async kvSet(key, value) {
+      const res = await run('kv', 'readwrite', (s) => s.put({ key, value }));
+      notify([{ store: 'kv', del: false, key }]);
+      return res;
+    },
   };
 })();

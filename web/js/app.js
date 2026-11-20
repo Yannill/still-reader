@@ -31,6 +31,7 @@ R.app = (() => {
     await R.study.init();
     R.reader.init();
     bindUI();
+    R.cloud && R.cloud.init();
     window.__appReady = true;
 
     // 开发/演示：?open=samples/sample.pdf 自动导入并打开
@@ -87,7 +88,8 @@ R.app = (() => {
     const m = R.library.get(id);
     if (!m) return;
     const cached = await R.study.takePrepared(id).catch(() => null);
-    const file = cached?.file || await R.db.get('files', id);
+    let file = cached?.file || await R.db.get('files', id);
+    if (!file) file = await R.cloud?.downloadPdf?.(id);
     if (!file) { R.toast('文件数据丢失，请重新导入', 'error'); return; }
     await route('reader');
     R.focus.reset();
