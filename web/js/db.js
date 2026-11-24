@@ -8,11 +8,15 @@
 'use strict';
 R.db = (() => {
   let dbp = null;
-  let silent = false;
   const STORES = { docs: 'id', files: 'id', annots: 'id', chats: 'id', kv: 'key', boxes: 'id' };
 
+  function timestampDoc(value, previous) {
+    const lastEdit = Math.max(value.updatedAt || 0, previous?.updatedAt || 0, value.lastOpened || 0, value.addedAt || 0);
+    return { ...value, updatedAt: Math.max(Date.now(), lastEdit + 1) };
+  }
+
   function notify(events) {
-    if (!silent && events?.length) R.cloud?.onLocalChange?.(events);
+    if (events?.length) R.cloud?.onLocalChange?.(events);
   }
 
   function open() {
@@ -49,41 +53,69 @@ R.db = (() => {
   }
 
   return {
-    async runSilent(fn) {
-      const prev = silent;
-      silent = true;
-      try { return await fn(); } finally { silent = prev; }
-    },
-    async batch(operations) {
+    async batch(operations, { silent = false } = {}) {
       const d = await open();
+      const applied = [];
       await new Promise((resolve, reject) => {
         const t = d.transaction([...new Set(operations.map(o => o.store))], 'readwrite');
-        operations.forEach(o => t.objectStore(o.store)[o.del ? 'delete' : 'put'](o.value));
+        for (const operation of operations) {
+          const { store, value, del, expected } = operation;
+          const objectStore = t.objectStore(store);
+          const stamp = store === 'docs' && !silent && !del;
+          const conditional = Object.hasOwn(operation, 'expected');
+          const apply = previous => {
+            const stored = stamp ? timestampDoc(value, previous) : value;
+            objectStore[del ? 'delete' : 'put'](stored);
+            applied.push(operation);
+          };
+          if (!conditional && !stamp) {
+            apply();
+            continue;
+          }
+          // An edit may have landed after the cloud read, including in another tab.
+          const key = del ? value : value[STORES[store]];
+          const request = objectStore.get(key);
+          request.onsuccess = () => {
+            if (!conditional || JSON.stringify(request.result) === JSON.stringify(expected)) apply(request.result);
+          };
+        }
         t.oncomplete = () => resolve();
         t.onerror = t.onabort = () => reject(t.error || new Error('存储事务未完成'));
       });
-      notify(operations.map(o => ({
+      if (!silent) notify(applied.map(o => ({
         store: o.store,
         del: !!o.del,
         id: o.del ? o.value : o.value?.id,
         key: o.store === 'kv' ? (o.del ? o.value : o.value?.key) : undefined,
       })));
+      return applied;
     },
     // Merge progress atomically with changes made in other tabs.
-    async patchDoc(id, fields) {
+    async patchDoc(id, fields, { silent = false } = {}) {
       await run('docs', 'readwrite', store => {
         const request = store.get(id);
         request.onsuccess = () => {
-          if (request.result) store.put({ ...request.result, ...fields });
+          if (request.result) {
+            const value = { ...request.result, ...fields };
+            store.put(silent ? value : timestampDoc(value, request.result));
+          }
         };
       });
-      notify([{ store: 'docs', del: false, id }]);
+      if (!silent) notify([{ store: 'docs', del: false, id }]);
     },
     get: (store, key) => run(store, 'readonly', (s) => s.get(key)),
     all: (store) => run(store, 'readonly', (s) => s.getAll()),
-    async put(store, val) {
+    async put(store, val, { silent = false } = {}) {
+      if (store === 'docs' && !silent) {
+        await run('docs', 'readwrite', s => {
+          const req = s.get(val.id);
+          req.onsuccess = () => s.put(timestampDoc(val, req.result));
+        });
+        notify([{ store, del: false, id: val.id }]);
+        return val.id;
+      }
       const res = await run(store, 'readwrite', (s) => s.put(val));
-      notify([{ store, del: false, id: val?.id, key: store === 'kv' ? val?.key : undefined }]);
+      if (!silent) notify([{ store, del: false, id: val?.id, key: store === 'kv' ? val?.key : undefined }]);
       return res;
     },
     async del(store, key) {

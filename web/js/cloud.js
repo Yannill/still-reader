@@ -8,18 +8,21 @@ R.cloud = (() => {
   const SUPABASE_KEY = 'sb_publishable_MbczRXtrn7FRMIN-icHntw_Ta1ZASxg';
   const PDF_BUCKET = 'pdfs';
   const MAX_PDF_BYTES = 25 * 1024 * 1024; // 单文件 25MB 上限，保护免费 Storage 额度
+  const REFRESH_MS = 30000;
 
   let sb = null;
   let sbReady = null;
   let user = null;
-  let syncing = false;
+  let syncQueue = Promise.resolve();
+  let fullSync = null;
   let lastSyncAt = 0;
   let syncStatus = 'idle'; // idle | syncing | ok | error
-  let bucketWarned = false;
+  let syncError = '';
+  let applyingCloudSettings = false;
   let authMode = 'login'; // login | signup
 
   // 待同步队列（按 store 聚合，避免高频写入刷爆网络）
-  const dirty = {
+  const newDirtyQueue = () => ({
     boxes: new Set(),
     delBoxes: new Set(),
     docs: new Set(),
@@ -31,7 +34,8 @@ R.cloud = (() => {
     kv: new Set(),
     pdfs: new Set(),
     settings: false,
-  };
+  });
+  let dirty = newDirtyQueue();
 
   const SYNC_KV_KEYS = new Set(['stats', 'parking', 'libraryView']);
 
@@ -78,14 +82,20 @@ R.cloud = (() => {
   function init() {
     bindUI();
     R.bus.on('settings', () => {
-      if (!user) return;
+      if (!user || applyingCloudSettings) return;
       dirty.settings = true;
       schedulePush();
     });
-    window.addEventListener('online', () => { if (user) syncAll({ quiet: true }); });
+    const refresh = () => {
+      if (user && !document.hidden && navigator.onLine !== false) syncAll({ quiet: true, refreshOnly: true });
+    };
+    window.addEventListener('online', refresh);
+    window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && user) flushPush();
+      if (document.hidden) flushPush();
+      else refresh();
     });
+    setInterval(refresh, REFRESH_MS);
     // 后台静默恢复已登录会话，不阻塞阅读器首屏启动
     loadSdk().then(async (client) => {
       const { data } = await client.auth.getSession();
@@ -105,14 +115,15 @@ R.cloud = (() => {
     const prevId = user?.id || null;
     const nextId = nextUser?.id || null;
     user = nextUser;
+    if (prevId !== nextId) {
+      dirty = newDirtyQueue();
+      lastSyncAt = 0;
+      syncStatus = 'idle';
+      syncError = '';
+    }
     updateAccountUI();
     if (nextId && (nextId !== prevId || (initial && !lastSyncAt))) {
       syncAll({ quiet: initial || event === 'TOKEN_REFRESHED' });
-    }
-    if (!nextId && prevId) {
-      lastSyncAt = 0;
-      syncStatus = 'idle';
-      updateAccountUI();
     }
   }
 
@@ -286,7 +297,7 @@ R.cloud = (() => {
       ? new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(lastSyncAt)
       : '尚未同步';
     const label = syncStatus === 'syncing' ? '正在同步云端数据…'
-      : syncStatus === 'error' ? '上次同步遇到网络异常，可点下方重试'
+      : syncStatus === 'error' ? syncError
       : `云端已同步 · ${timeStr}`;
     R.$('#acctSyncMeta').textContent = label;
   }
@@ -326,11 +337,14 @@ R.cloud = (() => {
 
   const schedulePush = R.debounce(() => { flushPush(); }, 1200);
 
+  const docVersion = doc => Math.max(doc?.updatedAt || 0, doc?.lastOpened || 0, doc?.addedAt || 0);
+
   function sanitizeDocForCloud(d) {
     const copy = structuredClone(d);
     // 仅上传轻量缩略图，避免单行 JSON 体积过大（本地保留清晰 thumb2x）
     if (copy.thumb2x && copy.thumb2x.length > 45000) delete copy.thumb2x;
-    copy.updatedAt = Date.now();
+    // Keep the edit time independent from upload/acknowledgement time.
+    copy.updatedAt = docVersion(d) || Date.now();
     return copy;
   }
 
@@ -341,24 +355,55 @@ R.cloud = (() => {
     return copy;
   }
 
-  async function flushPush() {
-    if (!user || !sb) return;
-    const uid = user.id;
-    const hasPending = dirty.boxes.size || dirty.delBoxes.size || dirty.docs.size || dirty.delDocs.size ||
-      dirty.annots.size || dirty.delAnnots.size || dirty.chats.size || dirty.delChats.size ||
-      dirty.kv.size || dirty.settings || dirty.pdfs.size;
-    if (!hasPending) return;
+  function hasPending() {
+    return Object.values(dirty).some(value => value === true || value.size);
+  }
 
-    syncStatus = 'syncing';
+  function enqueueSync(task) {
+    const uid = user?.id;
+    if (!uid) return Promise.resolve();
+    const next = syncQueue.then(() => { if (user?.id === uid) return task(uid); });
+    syncQueue = next.catch(() => {});
+    return next;
+  }
+
+  function setSyncError(error, quiet) {
+    syncStatus = 'error';
+    syncError = '云同步遇到问题。' + translateError(error);
     updateAccountUI();
+    if (!quiet) R.toast(syncError, 'error', 4500);
+  }
+
+  function flushPush() {
+    return enqueueSync(async uid => {
+      if (!sb || !hasPending()) return;
+      syncStatus = 'syncing';
+      updateAccountUI();
+      try {
+        await pushPending(uid);
+        if (user?.id !== uid) return;
+        lastSyncAt = Date.now();
+        syncStatus = 'ok';
+        updateAccountUI();
+      } catch (e) {
+        if (user?.id !== uid) return;
+        console.warn('Cloud push error:', e);
+        setSyncError(e, true);
+      }
+    });
+  }
+
+  async function pushPending(uid) {
+    if (!hasPending()) return;
+    const pending = dirty;
+    dirty = newDirtyQueue();
     try {
       const nowIso = new Date().toISOString();
 
       // 1. Boxes
-      if (dirty.boxes.size) {
-        const ids = [...dirty.boxes]; dirty.boxes.clear();
+      if (pending.boxes.size) {
         const rows = [];
-        for (const id of ids) {
+        for (const id of pending.boxes) {
           const b = await R.db.get('boxes', id);
           if (b) rows.push({ user_id: uid, id, data: { ...b, updatedAt: Date.now() }, updated_at: nowIso });
         }
@@ -366,18 +411,18 @@ R.cloud = (() => {
           const { error } = await sb.from('user_boxes').upsert(rows);
           if (error) throw error;
         }
+        pending.boxes.clear();
       }
-      if (dirty.delBoxes.size) {
-        const ids = [...dirty.delBoxes]; dirty.delBoxes.clear();
-        const { error } = await sb.from('user_boxes').delete().eq('user_id', uid).in('id', ids);
+      if (pending.delBoxes.size) {
+        const { error } = await sb.from('user_boxes').delete().eq('user_id', uid).in('id', [...pending.delBoxes]);
         if (error) throw error;
+        pending.delBoxes.clear();
       }
 
       // 2. Docs
-      if (dirty.docs.size) {
-        const ids = [...dirty.docs]; dirty.docs.clear();
+      if (pending.docs.size) {
         const rows = [];
-        for (const id of ids) {
+        for (const id of pending.docs) {
           const d = await R.db.get('docs', id);
           if (d) rows.push({ user_id: uid, id, data: sanitizeDocForCloud(d), updated_at: nowIso });
         }
@@ -385,21 +430,25 @@ R.cloud = (() => {
           const { error } = await sb.from('user_docs').upsert(rows);
           if (error) throw error;
         }
+        pending.docs.clear();
       }
-      if (dirty.delDocs.size) {
-        const ids = [...dirty.delDocs]; dirty.delDocs.clear();
-        await sb.from('user_docs').delete().eq('user_id', uid).in('id', ids);
-        await sb.from('user_annots').delete().eq('user_id', uid).in('doc_id', ids);
-        await sb.from('user_chats').delete().eq('user_id', uid).in('doc_id', ids);
+      if (pending.delDocs.size) {
+        const ids = [...pending.delDocs];
+        const results = await Promise.all([
+          sb.from('user_docs').delete().eq('user_id', uid).in('id', ids),
+          sb.from('user_annots').delete().eq('user_id', uid).in('doc_id', ids),
+          sb.from('user_chats').delete().eq('user_id', uid).in('doc_id', ids),
+        ]);
+        for (const { error } of results) if (error) throw error;
         // 尝试同步清理 Storage 里的 PDF（若 bucket 尚未创建则忽略）
-        sb.storage.from(PDF_BUCKET).remove(ids.map((id) => `${uid}/${id}.pdf`)).catch(() => {});
+        await sb.storage.from(PDF_BUCKET).remove(ids.map(id => pdfPath(uid, id))).catch(() => {});
+        pending.delDocs.clear();
       }
 
       // 3. Annots
-      if (dirty.annots.size) {
-        const ids = [...dirty.annots]; dirty.annots.clear();
+      if (pending.annots.size) {
         const rows = [];
-        for (const id of ids) {
+        for (const id of pending.annots) {
           const a = await R.db.get('annots', id);
           if (a) rows.push({ user_id: uid, doc_id: id, list: a.list || [], updated_at: nowIso });
         }
@@ -407,17 +456,18 @@ R.cloud = (() => {
           const { error } = await sb.from('user_annots').upsert(rows);
           if (error) throw error;
         }
+        pending.annots.clear();
       }
-      if (dirty.delAnnots.size) {
-        const ids = [...dirty.delAnnots]; dirty.delAnnots.clear();
-        await sb.from('user_annots').delete().eq('user_id', uid).in('doc_id', ids);
+      if (pending.delAnnots.size) {
+        const { error } = await sb.from('user_annots').delete().eq('user_id', uid).in('doc_id', [...pending.delAnnots]);
+        if (error) throw error;
+        pending.delAnnots.clear();
       }
 
       // 4. Chats
-      if (dirty.chats.size) {
-        const ids = [...dirty.chats]; dirty.chats.clear();
+      if (pending.chats.size) {
         const rows = [];
-        for (const id of ids) {
+        for (const id of pending.chats) {
           const c = await R.db.get('chats', id);
           if (c) rows.push({ user_id: uid, doc_id: id, messages: c.messages || [], updated_at: nowIso });
         }
@@ -425,59 +475,69 @@ R.cloud = (() => {
           const { error } = await sb.from('user_chats').upsert(rows);
           if (error) throw error;
         }
+        pending.chats.clear();
       }
-      if (dirty.delChats.size) {
-        const ids = [...dirty.delChats]; dirty.delChats.clear();
-        await sb.from('user_chats').delete().eq('user_id', uid).in('doc_id', ids);
+      if (pending.delChats.size) {
+        const { error } = await sb.from('user_chats').delete().eq('user_id', uid).in('doc_id', [...pending.delChats]);
+        if (error) throw error;
+        pending.delChats.clear();
       }
 
       // 5. KV & Settings
       const stateRows = [];
-      if (dirty.kv.size) {
-        const keys = [...dirty.kv]; dirty.kv.clear();
-        for (const k of keys) {
+      if (pending.kv.size) {
+        for (const k of pending.kv) {
           const val = await R.db.kvGet(k, null);
           stateRows.push({ user_id: uid, key: k, value: val, updated_at: nowIso });
         }
       }
-      if (dirty.settings) {
-        dirty.settings = false;
+      if (pending.settings) {
         stateRows.push({ user_id: uid, key: 'settings', value: sanitizeSettingsForCloud(), updated_at: nowIso });
       }
       if (stateRows.length) {
         const { error } = await sb.from('user_state').upsert(stateRows);
         if (error) throw error;
       }
+      pending.kv.clear();
+      pending.settings = false;
 
       // 6. PDF 文件后台上传
-      if (dirty.pdfs.size) {
-        const pdfIds = [...dirty.pdfs]; dirty.pdfs.clear();
-        for (const id of pdfIds) {
-          await uploadSinglePdf(id, { quiet: true });
+      for (const id of pending.pdfs) {
+        await uploadSinglePdf(uid, id);
+        pending.pdfs.delete(id);
+      }
+    } catch (e) {
+      if (user?.id === uid) {
+        const opposite = { boxes: 'delBoxes', delBoxes: 'boxes', docs: 'delDocs', delDocs: 'docs',
+          annots: 'delAnnots', delAnnots: 'annots', chats: 'delChats', delChats: 'chats', pdfs: 'delDocs' };
+        for (const [key, values] of Object.entries(pending)) {
+          if (key === 'settings') dirty.settings ||= values;
+          else for (const value of values) if (!dirty[opposite[key]]?.has(value)) dirty[key].add(value);
         }
       }
-
-      lastSyncAt = Date.now();
-      syncStatus = 'ok';
-      updateAccountUI();
-    } catch (e) {
-      console.warn('Cloud push error:', e);
-      syncStatus = 'error';
-      updateAccountUI();
+      throw e;
     }
   }
 
   /* ---------------- 双向合并全量同步 ---------------- */
-  async function syncAll({ quiet = false } = {}) {
-    if (!user || syncing) return;
-    syncing = true;
+  function syncAll({ quiet = false, refreshOnly = false } = {}) {
+    const uid = user?.id;
+    if (!uid) return Promise.resolve();
+    if (quiet && fullSync?.uid === uid) return fullSync.work;
+    const work = enqueueSync(id => syncAllNow(id, { quiet, refreshOnly }));
+    fullSync = { uid, work };
+    return work.finally(() => { if (fullSync?.work === work) fullSync = null; });
+  }
+
+  async function syncAllNow(uid, { quiet, refreshOnly }) {
     syncStatus = 'syncing';
     updateAccountUI();
     try {
       const client = await loadSdk();
-      const uid = user.id;
-
-      // 先把尚未发出的本地变更冲刷掉（避免覆盖）
+      // 保留本地未提交的写入，并允许成功的远程读取继续刷新书架。
+      let pushError;
+      try { await pushPending(uid); } catch (e) { pushError = e; }
+      if (user?.id !== uid) return;
       const [rBoxes, rDocs, rAnnots, rChats, rState] = await Promise.all([
         client.from('user_boxes').select('id, data, updated_at').eq('user_id', uid),
         client.from('user_docs').select('id, data, updated_at').eq('user_id', uid),
@@ -489,14 +549,17 @@ R.cloud = (() => {
         if (r.error) throw r.error;
       }
 
-      const [lBoxes, lDocs, lAnnots, lChats] = await Promise.all([
+      const [lBoxes, lDocs, lAnnots, lChats, statsRecord, parkingRecord] = await Promise.all([
         R.db.all('boxes'),
         R.db.all('docs'),
         R.db.all('annots'),
         R.db.all('chats'),
+        R.db.get('kv', 'stats'),
+        R.db.get('kv', 'parking'),
       ]);
-      const lStats = await R.db.kvGet('stats', {});
-      const lParking = await R.db.kvGet('parking', []);
+      const lStats = statsRecord?.value || {};
+      const lParking = parkingRecord?.value || [];
+      if (user?.id !== uid) return;
 
       const nowIso = new Date().toISOString();
       const pushBoxes = [], pushDocs = [], pushAnnots = [], pushChats = [], pushState = [];
@@ -507,17 +570,18 @@ R.cloud = (() => {
       const lBoxMap = new Map(lBoxes.map((x) => [x.id, x]));
       const allBoxIds = new Set([...rBoxMap.keys(), ...lBoxMap.keys()]);
       for (const id of allBoxIds) {
+        if (dirty.boxes.has(id) || dirty.delBoxes.has(id)) continue;
         const lb = lBoxMap.get(id), rb = rBoxMap.get(id);
         if (rb && !lb) {
           localOps.push({ store: 'boxes', value: { ...rb.data, id } });
-        } else if (lb && !rb) {
+        } else if (lb && !rb && !refreshOnly) {
           pushBoxes.push({ user_id: uid, id, data: { ...lb, updatedAt: lb.updatedAt || Date.now() }, updated_at: nowIso });
         } else if (lb && rb) {
           const rTime = Date.parse(rb.updated_at || '') || rb.data?.updatedAt || 0;
           const lTime = lb.updatedAt || lb.createdAt || 0;
           if (rTime >= lTime) {
             localOps.push({ store: 'boxes', value: { ...rb.data, id } });
-          } else {
+          } else if (!refreshOnly) {
             pushBoxes.push({ user_id: uid, id, data: lb, updated_at: nowIso });
           }
         }
@@ -528,23 +592,24 @@ R.cloud = (() => {
       const lDocMap = new Map(lDocs.map((x) => [x.id, x]));
       const allDocIds = new Set([...rDocMap.keys(), ...lDocMap.keys()]);
       for (const id of allDocIds) {
+        if (dirty.docs.has(id) || dirty.delDocs.has(id)) continue;
         const ld = lDocMap.get(id), rd = rDocMap.get(id);
         if (rd && !ld) {
           localOps.push({ store: 'docs', value: { ...rd.data, id } });
-        } else if (ld && !rd) {
+        } else if (ld && !rd && !refreshOnly) {
           pushDocs.push({ user_id: uid, id, data: sanitizeDocForCloud(ld), updated_at: nowIso });
         } else if (ld && rd) {
-          const rTime = Math.max(Date.parse(rd.updated_at || '') || 0, rd.data?.lastOpened || 0, rd.data?.updatedAt || 0);
-          const lTime = Math.max(ld.lastOpened || 0, ld.updatedAt || 0, ld.addedAt || 0);
-          if (rTime > lTime) {
+          const rTime = docVersion(rd.data) || Date.parse(rd.updated_at || '') || 0;
+          const lTime = docVersion(ld);
+          if (rTime >= lTime) {
             const merged = { ...ld, ...rd.data, id };
             if (ld.thumb2x && !rd.data?.thumb2x) merged.thumb2x = ld.thumb2x;
+            if (ld.cloudPdf) merged.cloudPdf = true;
             localOps.push({ store: 'docs', value: merged });
           } else {
-            const merged = { ...rd.data, ...ld, id };
-            if (rd.data?.cloudPdf) merged.cloudPdf = true;
-            localOps.push({ store: 'docs', value: merged });
-            pushDocs.push({ user_id: uid, id, data: sanitizeDocForCloud(merged), updated_at: nowIso });
+            const merged = rd.data?.cloudPdf ? { ...ld, cloudPdf: true } : ld;
+            if (merged !== ld) localOps.push({ store: 'docs', value: merged });
+            if (!refreshOnly) pushDocs.push({ user_id: uid, id, data: sanitizeDocForCloud(merged), updated_at: nowIso });
           }
         }
       }
@@ -554,10 +619,11 @@ R.cloud = (() => {
       const lAnnMap = new Map(lAnnots.map((x) => [x.id, x]));
       const allAnnIds = new Set([...rAnnMap.keys(), ...lAnnMap.keys()]);
       for (const id of allAnnIds) {
+        if (dirty.annots.has(id) || dirty.delAnnots.has(id)) continue;
         const la = lAnnMap.get(id), ra = rAnnMap.get(id);
         if (ra && !la) {
           localOps.push({ store: 'annots', value: { id, list: ra.list || [] } });
-        } else if (la && !ra) {
+        } else if (la && !ra && !refreshOnly) {
           if (la.list?.length) pushAnnots.push({ user_id: uid, doc_id: id, list: la.list, updated_at: nowIso });
         } else if (la && ra) {
           const byId = new Map();
@@ -570,7 +636,7 @@ R.cloud = (() => {
           }
           const mergedList = [...byId.values()];
           localOps.push({ store: 'annots', value: { id, list: mergedList } });
-          if (mergedList.length !== (ra.list || []).length) {
+          if (!refreshOnly && mergedList.length !== (ra.list || []).length) {
             pushAnnots.push({ user_id: uid, doc_id: id, list: mergedList, updated_at: nowIso });
           }
         }
@@ -581,15 +647,16 @@ R.cloud = (() => {
       const lChatMap = new Map(lChats.map((x) => [x.id, x]));
       const allChatIds = new Set([...rChatMap.keys(), ...lChatMap.keys()]);
       for (const id of allChatIds) {
+        if (dirty.chats.has(id) || dirty.delChats.has(id)) continue;
         const lc = lChatMap.get(id), rc = rChatMap.get(id);
         if (rc && !lc) {
           localOps.push({ store: 'chats', value: { id, messages: rc.messages || [] } });
-        } else if (lc && !rc) {
+        } else if (lc && !rc && !refreshOnly) {
           if (lc.messages?.length) pushChats.push({ user_id: uid, doc_id: id, messages: lc.messages, updated_at: nowIso });
         } else if (lc && rc) {
           if ((rc.messages?.length || 0) >= (lc.messages?.length || 0)) {
             localOps.push({ store: 'chats', value: { id, messages: rc.messages || [] } });
-          } else {
+          } else if (!refreshOnly) {
             pushChats.push({ user_id: uid, doc_id: id, messages: lc.messages || [], updated_at: nowIso });
           }
         }
@@ -606,8 +673,10 @@ R.cloud = (() => {
           minutes: Math.max(prev.minutes || 0, val?.minutes || 0),
         };
       }
-      localOps.push({ store: 'kv', value: { key: 'stats', value: mergedStats } });
-      pushState.push({ user_id: uid, key: 'stats', value: mergedStats, updated_at: nowIso });
+      if (!dirty.kv.has('stats')) {
+        if (JSON.stringify(mergedStats) !== JSON.stringify(lStats)) localOps.push({ store: 'kv', value: { key: 'stats', value: mergedStats } });
+        if (JSON.stringify(mergedStats) !== JSON.stringify(rStats)) pushState.push({ user_id: uid, key: 'stats', value: mergedStats, updated_at: nowIso });
+      }
 
       const rParking = Array.isArray(rStateMap.get('parking')) ? rStateMap.get('parking') : [];
       const parkKey = (p) => p.id || `${p.at || 0}|${p.text || ''}`;
@@ -617,26 +686,33 @@ R.cloud = (() => {
         if (!parkMap.has(parkKey(p))) parkMap.set(parkKey(p), p);
       }
       const mergedParking = [...parkMap.values()].sort((a, b) => (b.at || 0) - (a.at || 0));
-      localOps.push({ store: 'kv', value: { key: 'parking', value: mergedParking } });
-      if (mergedParking.length !== rParking.length) {
-        pushState.push({ user_id: uid, key: 'parking', value: mergedParking, updated_at: nowIso });
+      if (!dirty.kv.has('parking')) {
+        if (JSON.stringify(mergedParking) !== JSON.stringify(lParking)) localOps.push({ store: 'kv', value: { key: 'parking', value: mergedParking } });
+        if (mergedParking.length !== rParking.length) pushState.push({ user_id: uid, key: 'parking', value: mergedParking, updated_at: nowIso });
       }
 
       const rSettings = rStateMap.get('settings');
-      if (rSettings && typeof rSettings === 'object') {
+      if (rSettings && typeof rSettings === 'object' && !dirty.settings && JSON.stringify(rSettings) !== JSON.stringify(sanitizeSettingsForCloud())) {
         const localApiKey = R.settings.ai?.apiKey || '';
         Object.assign(R.settings, rSettings);
         if (rSettings.ai) R.settings.ai = Object.assign({}, R.DEFAULT_SETTINGS.ai, rSettings.ai, { apiKey: localApiKey });
         localStorage.setItem('adhd-reader-settings', JSON.stringify(R.settings));
-        R.bus.emit('settings');
-      } else {
+        applyingCloudSettings = true;
+        try { R.bus.emit('settings'); } finally { applyingCloudSettings = false; }
+      } else if (!rSettings && !dirty.settings) {
         pushState.push({ user_id: uid, key: 'settings', value: sanitizeSettingsForCloud(), updated_at: nowIso });
       }
 
       // 静默写回本地 IndexedDB（不触发二次回弹推送）
-      if (localOps.length) {
-        await R.db.runSilent(() => R.db.batch(localOps));
+      const previous = { boxes: lBoxMap, docs: lDocMap, annots: lAnnMap, chats: lChatMap,
+        kv: new Map([['stats', statsRecord], ['parking', parkingRecord]]) };
+      const changes = [];
+      for (const op of localOps) {
+        const expected = previous[op.store].get(op.value.id || op.value.key);
+        if (JSON.stringify(expected) !== JSON.stringify(op.value)) changes.push({ ...op, expected });
       }
+      const applied = changes.length ? await R.db.batch(changes, { silent: true }) : [];
+      if (user?.id !== uid) return;
 
       // 批量上推本地新增/更新数据到云端
       const pushes = [];
@@ -649,100 +725,112 @@ R.cloud = (() => {
       for (const r of results) { if (r.error) throw r.error; }
 
       // 刷新界面展示
-      await R.library.load();
-      await R.study.reloadBoxes?.();
-      if (!R.$('#homeView').classList.contains('hidden')) await R.study.renderLibrary();
-      if (!R.$('#notesView').classList.contains('hidden')) await R.study.renderNotes();
-      if (!R.$('#focusView').classList.contains('hidden')) await R.study.renderFocus();
+      if (applied.some(({ store }) => store === 'docs' || store === 'boxes')) {
+        await R.library.load();
+        await R.study.reloadBoxes?.();
+        if (!R.$('#homeView').classList.contains('hidden')) await R.study.renderLibrary();
+      }
+      if (applied.length && !R.$('#notesView').classList.contains('hidden')) await R.study.renderNotes();
+      if (applied.length && !R.$('#focusView').classList.contains('hidden')) await R.study.renderFocus();
 
+      if (pushError) throw pushError;
+      await repairPdfs(uid, { remoteIds: refreshOnly ? rDocMap : null });
+      if (user?.id !== uid) return;
       lastSyncAt = Date.now();
       syncStatus = 'ok';
       updateAccountUI();
-      if (!quiet) R.toast('云端书库与批注已同步完成', 'success');
-
-      // 后台静默补传本地 PDF 原件至 Supabase Storage
-      uploadMissingPdfs({ quiet: true });
+      if (!quiet) R.toast('云端书库与可上传的 PDF 原件已同步', 'success');
     } catch (e) {
+      if (user?.id !== uid) return;
       console.warn('Cloud syncAll error:', e);
-      syncStatus = 'error';
-      updateAccountUI();
-      if (!quiet) R.toast('云同步失败：' + translateError(e), 'error', 4500);
-    } finally {
-      syncing = false;
+      setSyncError(e, quiet);
     }
   }
 
   /* ---------------- PDF 原件云端存储（Supabase Storage: pdfs） ---------------- */
-  async function uploadSinglePdf(docId, { quiet = true } = {}) {
-    if (!user || !sb) return false;
-    const file = await R.db.get('files', docId);
-    if (!file?.bytes) return false;
+  const pdfPath = (uid, docId) => `${uid}/${docId}.pdf`;
+
+  async function uploadSinglePdf(uid, docId) {
+    const [file, meta] = await Promise.all([R.db.get('files', docId), R.db.get('docs', docId)]);
+    if (user?.id !== uid || !meta || !file?.bytes) return 'unavailable';
     const bytes = file.bytes instanceof Uint8Array ? file.bytes : new Uint8Array(file.bytes);
-    const meta = R.library.get(docId);
-    if (bytes.byteLength > MAX_PDF_BYTES) {
-      if (!quiet) R.toast(`《${meta?.title || '文档'}》超过 25MB，仅本地保留，批注和进度仍会云端同步`, 'info', 4500);
-      return false;
-    }
-    const path = `${user.id}/${docId}.pdf`;
+    if (bytes.byteLength > MAX_PDF_BYTES) return 'oversize';
     const blob = new Blob([bytes], { type: 'application/pdf' });
-    const { error } = await sb.storage.from(PDF_BUCKET).upload(path, blob, {
+    const { error } = await sb.storage.from(PDF_BUCKET).upload(pdfPath(uid, docId), blob, {
       contentType: 'application/pdf',
       upsert: true,
     });
     if (error) {
-      if (/bucket not found/i.test(error.message || '')) {
-        if (!bucketWarned) {
-          bucketWarned = true;
-          R.toast('书库和批注已同步；如需同步 PDF 原件，请先在 Supabase 创建名为 pdfs 的 Storage 桶', 'info', 6000);
-        }
-        return false;
-      }
-      throw error;
+      const detail = /bucket not found/i.test(error.message || '') ? '云端 PDF 存储不可用' : translateError(error);
+      throw new Error('PDF 原件上传失败。' + detail);
     }
-    if (meta && !meta.cloudPdf) {
-      meta.cloudPdf = true;
-      await R.db.runSilent(() => R.db.put('docs', structuredClone(meta)));
-      await sb.from('user_docs').upsert({
-        user_id: user.id,
+    const latest = await R.db.get('docs', docId);
+    if (user?.id !== uid || !latest) return 'unavailable';
+    if (!latest.cloudPdf) {
+      const { error } = await sb.from('user_docs').upsert({
+        user_id: uid,
         id: docId,
-        data: sanitizeDocForCloud(meta),
+        data: sanitizeDocForCloud({ ...latest, cloudPdf: true }),
         updated_at: new Date().toISOString(),
       });
+      if (error) throw error;
+      if (user?.id !== uid) return 'unavailable';
+      await R.db.patchDoc(docId, { cloudPdf: true }, { silent: true });
+      const cached = R.library.get(docId);
+      if (cached) cached.cloudPdf = true;
     }
-    return true;
+    return 'uploaded';
   }
 
-  async function uploadMissingPdfs({ quiet = false } = {}) {
-    if (!user) return;
-    try {
-      await loadSdk();
-      const docs = R.library.all();
-      let uploaded = 0;
-      for (const d of docs) {
-        if (d.cloudPdf) continue;
-        const ok = await uploadSinglePdf(d.id, { quiet });
-        if (ok) uploaded++;
-        if (bucketWarned) break;
-      }
-      if (!quiet && !bucketWarned) {
-        R.toast(uploaded ? `已将 ${uploaded} 份 PDF 原件同步到云端` : '所有符合大小的 PDF 原件均已在云端', 'success');
-      }
-    } catch (e) {
-      if (!quiet) R.toast('PDF 上传失败：' + translateError(e), 'error', 4500);
+  async function repairPdfs(uid, { force = false, remoteIds = null } = {}) {
+    let uploaded = 0;
+    let oversize = 0;
+    for (const doc of await R.db.all('docs')) {
+      if (remoteIds && !remoteIds.has(doc.id)) continue;
+      if (!force && (doc.cloudPdf || doc.size > MAX_PDF_BYTES)) continue;
+      const outcome = await uploadSinglePdf(uid, doc.id);
+      if (outcome === 'uploaded') uploaded++;
+      if (outcome === 'oversize') oversize++;
     }
+    return { uploaded, oversize };
+  }
+
+  function uploadMissingPdfs({ quiet = false } = {}) {
+    return enqueueSync(async uid => {
+      syncStatus = 'syncing';
+      updateAccountUI();
+      try {
+        await loadSdk();
+        await pushPending(uid);
+        const { uploaded, oversize } = await repairPdfs(uid, { force: true });
+        if (user?.id !== uid) return;
+        lastSyncAt = Date.now();
+        syncStatus = 'ok';
+        updateAccountUI();
+        if (!quiet) {
+          const message = uploaded ? `已同步 ${uploaded} 份本地 PDF 原件` : '没有可补传的本地 PDF 原件';
+          R.toast(message + (oversize ? `，${oversize} 份超过 25 MB，保留在本地` : ''), oversize ? 'info' : 'success');
+        }
+      } catch (e) {
+        if (user?.id === uid) setSyncError(e, quiet);
+      }
+    });
   }
 
   async function downloadPdf(docId) {
-    if (!user) return null;
+    const uid = user?.id;
+    if (!uid) return null;
     try {
       const client = await loadSdk();
       R.toast('正在从云端获取 PDF 原件…', 'info', 2200);
-      const path = `${user.id}/${docId}.pdf`;
-      const { data, error } = await client.storage.from(PDF_BUCKET).download(path);
-      if (error || !data) return null;
+      const { data, error } = await client.storage.from(PDF_BUCKET).download(pdfPath(uid, docId));
+      if (error) throw error;
+      if (!data || user?.id !== uid) return null;
       const bytes = new Uint8Array(await data.arrayBuffer());
+      if (user?.id !== uid) return null;
       const record = { id: docId, bytes };
-      await R.db.runSilent(() => R.db.put('files', record));
+      try { await R.db.put('files', record, { silent: true }); }
+      catch (e) { console.warn('Cloud PDF cache failed:', e); }
       return record;
     } catch (e) {
       console.warn('Cloud PDF download failed:', e);
