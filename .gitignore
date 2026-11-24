@@ -16,6 +16,8 @@ out/
 coverage/
 .vercel/
 .netlify/
+.wrangler/
+.cloudflare/
 .cache/
 
 # Environment variables and machine-specific settings

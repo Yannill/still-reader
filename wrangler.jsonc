@@ -1,0 +1,16 @@
+{
+  "name": "still-reader",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-11-24",
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    }
+  },
+  "assets": {
+    "directory": "./web",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  }
+}
