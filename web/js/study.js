@@ -5,12 +5,37 @@
 R.study = (() => {
   const state = { railCollapsed: false, categoriesOpen: false, boxFilter: 'all', query: '', scrollTop: 0, sort: 'recent' };
   let boxes = [], urls = new Map(), prepared = null, previewId = null, returnFocus = null;
-  let transitioning = false, simplified = false, measured = false, clickTimer, menuId, upgradeRunning = false, flight = null, lastBookClick = null;
+  let transitioning = false, simplified = false, measured = false, clickTimer, menuId, upgradeRunning = false, flight = null, lastBookClick = null, draggingBook = null;
   const esc = R.esc;
   const pct = d => Math.round((d.progress || 0) * 100);
   const recent = () => R.library.all().filter(d => d.lastOpened).sort((a,b) => b.lastOpened-a.lastOpened)[0];
   const boxName = id => boxes.find(b => b.id === id)?.name || '未归档';
   const date = at => at ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(at) : '尚未翻开';
+  function formatAddedAt(at) {
+    const n = Number(at);
+    if (!Number.isFinite(n) || n <= 0) return '导入时间未知';
+    const d = new Date(n);
+    if (Number.isNaN(d.getTime())) return '导入时间未知';
+    const pad = v => String(v).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  function startBookDrag(bookId) {
+    const d = R.library.get(bookId);
+    draggingBook = { id: bookId, boxId: d?.boxId || '' };
+    document.body.classList.add('dragging-book');
+    R.$('#folderDialog')?.classList.add('dragging-book');
+    R.$$('[data-box], [data-drop-box]').forEach(el => {
+      const targetId = el.dataset.dropBox || el.dataset.box;
+      el.classList.toggle('drop-eligible', !!targetId && targetId !== draggingBook.boxId);
+    });
+  }
+  function clearBookDrag() {
+    draggingBook = null;
+    document.body.classList.remove('dragging-book');
+    R.$('#folderDialog')?.classList.remove('dragging-book');
+    R.$$('.drop-eligible').forEach(el => el.classList.remove('drop-eligible'));
+    R.$$('.drag-target').forEach(el => el.classList.remove('drag-target'));
+  }
   const saveView = R.debounce(() => R.db.kvSet('libraryView', { ...state }), 150);
   const matches = d => (d.title + ' ' + d.name + ' ' + boxName(d.boxId)).toLowerCase().includes(state.query.toLowerCase());
 
@@ -49,19 +74,25 @@ R.study = (() => {
     R.$('#homeView').addEventListener('scroll', () => { state.scrollTop = R.$('#homeView').scrollTop; saveView(); }, { passive: true });
     R.$('#homeView').addEventListener('dragstart', e => {
       const folder=e.target.closest('[data-folder-drag]');if(folder){e.dataTransfer.setData('application/x-still-folder',folder.dataset.folderDrag);e.dataTransfer.effectAllowed='move';return;}
-      const book = e.target.closest('[data-book]'); if (book) { e.dataTransfer.setData('application/x-still-book', book.dataset.book); e.dataTransfer.effectAllowed = 'move'; }
+      const book = e.target.closest('[data-book]'); if (book) { e.dataTransfer.setData('application/x-still-book', book.dataset.book); e.dataTransfer.effectAllowed = 'move'; startBookDrag(book.dataset.book); }
     });
-    R.$('#homeView').addEventListener('dragover', e => { const box = e.target.closest('[data-box]'); if (box) { e.preventDefault(); box.classList.add('drag-target'); } });
-    R.$('#homeView').addEventListener('dragleave', e => { if (!e.currentTarget.contains(e.relatedTarget)) R.$$('.drag-target').forEach(b => b.classList.remove('drag-target')); });
+    R.$('#homeView').addEventListener('dragover', e => {
+      const box = e.target.closest('[data-box]');
+      R.$$('#homeView .drag-target').forEach(b => { if (b !== box) b.classList.remove('drag-target'); });
+      if (box && (!draggingBook || box.dataset.box !== draggingBook.boxId)) { e.preventDefault(); box.classList.add('drag-target'); }
+    });
+    R.$('#homeView').addEventListener('dragleave', e => { if (!e.currentTarget.contains(e.relatedTarget)) R.$$('#homeView .drag-target').forEach(b => b.classList.remove('drag-target')); });
     R.$('#homeView').addEventListener('drop', async e => {
       const id = e.dataTransfer.getData('application/x-still-book'), box = e.target.closest('[data-box]');
-      R.$$('.drag-target').forEach(b => b.classList.remove('drag-target'));
+      clearBookDrag();
       const folderId=e.dataTransfer.getData('application/x-still-folder');if(folderId&&box){e.preventDefault();e.stopPropagation();return reorderBox(folderId,box.dataset.box);}
       if (id && box) { e.preventDefault(); e.stopPropagation(); await move(id, box.dataset.box); }
     });
+    window.addEventListener('dragend', clearBookDrag);
     R.$('#previewBack').onclick = closePreview;
     R.$('#previewContinue').onclick = () => direct(previewId);
     R.$('#previewStart').onclick = () => direct(previewId, true);
+    R.$('#previewMove').onclick = () => openMoveDialog(previewId);
     R.$('#previewMenu').onclick = () => showBookMenu(previewId);
     R.$('#previewDialog').addEventListener('cancel', e => { e.preventDefault(); finishMotion(); closePreview(); });
     R.$('#previewTitle').onkeydown = e => {
@@ -114,14 +145,18 @@ R.study = (() => {
     const h = R.clamp(0.92 + ((d.aspect || 0.75)-0.75)*0.15,0.88,1);
     return `<button class="shelf-book face ${d.progress?'in-progress':''} ${pct(d)>=100?'complete':''}" data-book="${d.id}" draggable="true" tabindex="${n===0?0:-1}" style="--book-h:${h*100}%;--tone:${esc(d.tone||'var(--box)')}" aria-label="《${esc(d.title)}》，${d.pageCount} 页，已读 ${pct(d)}%">${cover(d)}<i class="ribbon" style="height:${12+pct(d)*0.16}px"></i></button>`;
   }
-  function folderHTML(b,docs,idx=0){
+  function folderHTML(b,docs,idx=0,{showLabel=true}={}){
     const mono=['white','gray','black'][idx%3];
-    const gradId='fbg-'+b.id+'-'+mono;
+    const gradId='fbg-'+b.id+'-'+mono+(showLabel?'':'-mini');
     const stops=mono==='black'
-      ? '<stop offset="0%" stop-color="#3E3B37" stop-opacity=".86"/><stop offset="55%" stop-color="#282623" stop-opacity=".91"/><stop offset="100%" stop-color="#191816" stop-opacity=".95"/>'
+      ? '<stop offset="0%" stop-color="#6A645D" stop-opacity=".86"/><stop offset="46%" stop-color="#35322F" stop-opacity=".93"/><stop offset="100%" stop-color="#141312" stop-opacity=".98"/>'
       : mono==='gray'
       ? '<stop offset="0%" stop-color="#A8A49C" stop-opacity=".78"/><stop offset="55%" stop-color="#8B877F" stop-opacity=".84"/><stop offset="100%" stop-color="#6E6A63" stop-opacity=".9"/>'
       : '<stop offset="0%" stop-color="#F5F3ED" stop-opacity=".86"/><stop offset="55%" stop-color="#E6E2D9" stop-opacity=".88"/><stop offset="100%" stop-color="#D6D1C6" stop-opacity=".92"/>';
+    const gradDir = mono==='black' ? 'x1="0%" y1="0%" x2="0%" y2="100%"' : 'x1="0%" y1="0%" x2="100%" y2="100%"';
+    const frontRim = mono==='black'
+      ? '<svg class="folder-front-rim" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="5.5,0.6 35,0.6 44,15.3 96,15.3 99.7,21.2"/></svg>'
+      : '';
     const items=docs.slice(0,4);
     const sheets=[];
     for(let j=0;j<Math.max(3,items.length);j++){
@@ -133,7 +168,7 @@ R.study = (() => {
         sheets.push('<div class="folder-sheet folder-liner" style="--depth:'+j+';--slot:'+slot+'" aria-hidden="true"><div class="liner-lines"></div></div>');
       }
     }
-    return '<section class="archive-box folder" data-mono="'+mono+'" style="--folder-i:'+idx+'" data-box="'+b.id+'" role="listitem" aria-label="'+esc(b.name)+'，'+docs.length+' 本"><div class="folder-tilt"><div class="folder-shadow"></div><svg class="folder-back" viewBox="0 0 340 272" aria-hidden="true"><defs><linearGradient id="'+gradId+'" x1="0%" y1="0%" x2="100%" y2="100%">'+stops+'</linearGradient></defs><path fill="url(#'+gradId+')" d="M24 34H142C162 34 163 0 186 0H316Q340 0 340 24V248Q340 272 316 272H24Q0 272 0 248V58Q0 34 24 34Z"/></svg><div class="folder-sheets">'+sheets.join('')+'</div><div class="folder-front"><span class="folder-glare" aria-hidden="true"></span><button class="folder-hit" data-open-box="'+b.id+'" draggable="true" data-folder-drag="'+b.id+'" aria-label="打开文件夹 '+esc(b.name)+'" aria-expanded="false"></button><span class="folder-label"><b>'+esc(b.name)+'</b><small>'+String(docs.length).padStart(2,'0')+' 份文档</small></span><button class="folder-menu" data-edit-box="'+b.id+'" aria-label="管理文件夹 '+esc(b.name)+'">⋯</button></div></div></section>';
+    return '<section class="archive-box folder" data-mono="'+mono+'" style="--folder-i:'+idx+'" data-box="'+b.id+'" role="listitem" aria-label="'+esc(b.name)+'，'+docs.length+' 本"><div class="folder-tilt"><div class="folder-shadow"></div><svg class="folder-back" viewBox="0 0 340 272" aria-hidden="true"><defs><linearGradient id="'+gradId+'" '+gradDir+'>'+stops+'</linearGradient></defs><path fill="url(#'+gradId+')" d="M24 34H142C162 34 163 0 186 0H316Q340 0 340 24V248Q340 272 316 272H24Q0 272 0 248V58Q0 34 24 34Z"/></svg><div class="folder-sheets">'+sheets.join('')+'</div><div class="folder-front">'+frontRim+'<span class="folder-glare" aria-hidden="true"></span><button class="folder-hit" data-open-box="'+b.id+'" draggable="true" data-folder-drag="'+b.id+'" aria-label="打开文件夹 '+esc(b.name)+'" aria-expanded="false"></button>'+(showLabel?'<span class="folder-label"><b>'+esc(b.name)+'</b><small>'+String(docs.length).padStart(2,'0')+' 份文档</small></span><button class="folder-menu" data-edit-box="'+b.id+'" aria-label="管理文件夹 '+esc(b.name)+'">⋯</button>':'')+'</div></div></section>';
   }
   async function renderLibrary(){
     const el=R.$('#homeView'),last=recent(),shown=visibleDocs(),activeBoxes=boxes.filter(b=>state.boxFilter==='all'||state.boxFilter==='recent'&&shown.some(d=>d.boxId===b.id)||b.id===state.boxFilter);
@@ -152,13 +187,22 @@ R.study = (() => {
   }
   let openFolderId=null,folderReturn=null;
   function drawFolder(){
-    const b=boxes.find(b=>b.id===openFolderId);if(!b)return closeFolder();
+    const idx=boxes.findIndex(item=>item.id===openFolderId);
+    const b=boxes[idx];if(!b)return closeFolder();
     const docs = visibleDocs(state.boxFilter === 'recent' ? 'recent' : b.id).filter(d => d.boxId === b.id && matches(d));
-    R.$('#folderDialog').innerHTML='<div class="folder-dialog-head"><button data-close-folder>← 返回书架</button><button data-edit-box="'+b.id+'" aria-label="管理文件夹">管理 ⋯</button></div><div class="folder-focus-art" aria-hidden="true" inert>'+folderHTML(b,docs)+'</div><div class="folder-content-head"><h2 id="folderTitle">'+esc(b.name)+'</h2><span>'+docs.length+' 份文档</span><button data-folder-import>添加 PDF</button></div><div class="folder-contents" data-box="'+b.id+'">'+(docs.length?docs.map((d,i)=>'<div class="folder-book">'+bookHTML(d,i)+'<button data-menu="'+d.id+'" class="folder-book-menu" aria-label="管理 '+esc(d.title)+'">⋯</button><b>'+esc(d.title)+'</b><small>'+d.pageCount+' 页 · '+pct(d)+'%</small></div>').join(''):'<div class="folder-empty">'+(state.query?'没有匹配的书籍。':'文件夹还是空的。添加 PDF，或将书籍拖到这里。')+'</div>')+'</div><div class="folder-move-targets"><span>拖动书籍，移到：</span>'+boxes.filter(target=>target.id!==b.id).map(target=>'<button data-drop-box="'+target.id+'" data-open-box="'+target.id+'" title="拖放书籍至 '+esc(target.name)+'">'+esc(target.name)+'</button>').join('')+'</div>';
+    const isUnsorted = b.id === 'unsorted';
+    const docCards = docs.map((d,i)=>{
+      const addedText = isUnsorted ? formatAddedAt(d.addedAt) : '';
+      const addedLine = isUnsorted
+        ? '<small class="folder-book-added">'+(addedText==='导入时间未知'?'导入时间未知':'导入 '+esc(addedText))+'</small>'
+        : '';
+      return '<div class="folder-book">'+bookHTML(d,i)+'<button type="button" data-menu="'+d.id+'" class="folder-book-menu" aria-label="管理 '+esc(d.title)+'">⋯</button><b>'+esc(d.title)+'</b><small>'+d.pageCount+' 页 · '+pct(d)+'%</small>'+addedLine+'<button type="button" class="folder-book-move" data-move-book="'+d.id+'" aria-label="移动 '+esc(d.title)+' 到其他收纳盒">移动到…</button></div>';
+    }).join('');
+    R.$('#folderDialog').innerHTML='<div class="folder-dialog-head"><button type="button" class="folder-back-btn" data-close-folder>← 返回书架</button><button type="button" class="folder-add-btn btn-primary" data-folder-import>＋ 添加 PDF</button></div><div class="folder-hero"><div class="folder-focus-art" aria-hidden="true" inert>'+folderHTML(b,docs,idx,{showLabel:false})+'</div><div class="folder-hero-meta"><div class="folder-title-row"><h2 id="folderTitle">'+esc(b.name)+'</h2><span class="folder-count-pill">'+docs.length+' 份文档</span></div></div><button type="button" class="folder-manage-btn" data-edit-box="'+b.id+'" aria-label="管理收纳盒 '+esc(b.name)+'">管理 ⋯</button></div><div class="folder-contents" data-box="'+b.id+'">'+(docs.length?docCards:'<div class="folder-empty">'+(state.query?'没有匹配的书籍。':'收纳盒还是空的。点击上方「添加 PDF」，或拖入文件到这里。')+'</div>')+'</div><div class="folder-move-targets"><span class="folder-move-hint">拖动书籍，移到：</span>'+boxes.filter(target=>target.id!==b.id).map(target=>'<button type="button" data-drop-box="'+target.id+'" data-open-box="'+target.id+'" title="拖放书籍至 '+esc(target.name)+'，或点击切换">'+esc(target.name)+'</button>').join('')+'</div>';
   }
   function openFolder(id){
     openFolderId=id;folderReturn=R.$('[data-open-box="'+id+'"]');
-    let dialog=R.$('#folderDialog');if(!dialog){dialog=document.createElement('dialog');dialog.id='folderDialog';dialog.className='folder-dialog';dialog.setAttribute('aria-labelledby','folderTitle');document.body.appendChild(dialog);dialog.onclick=onClick;dialog.addEventListener('cancel',e=>{e.preventDefault();closeFolder();});dialog.addEventListener('contextmenu',e=>{const b=e.target.closest('[data-book]');if(b){e.preventDefault();showBookMenu(b.dataset.book);}});dialog.addEventListener('dragstart',e=>{const b=e.target.closest('[data-book]');if(b)e.dataTransfer.setData('application/x-still-book',b.dataset.book);});dialog.addEventListener('keydown',e=>{const book=e.target.closest('[data-book]');if(!book)return;if(e.key==='Enter'&&e.shiftKey){e.preventDefault();direct(book.dataset.book);}if(e.key.startsWith('Arrow')){e.preventDefault();const all=R.$$('[data-book]',dialog),n=all.indexOf(book),step=/Left|Up/.test(e.key)?-1:1,next=all[(n+step+all.length)%all.length];all.forEach(b=>b.tabIndex=-1);next.tabIndex=0;next.focus();}});dialog.addEventListener('dragover',e=>{const target=e.target.closest('[data-drop-box]');if(target){e.preventDefault();target.classList.add('drag-target');}});dialog.addEventListener('dragleave',e=>e.target.closest('[data-drop-box]')?.classList.remove('drag-target'));dialog.addEventListener('drop',e=>{const target=e.target.closest('[data-drop-box]'),id=e.dataTransfer.getData('application/x-still-book');if(target&&id){e.preventDefault();e.stopPropagation();move(id,target.dataset.dropBox);}});}
+    let dialog=R.$('#folderDialog');if(!dialog){dialog=document.createElement('dialog');dialog.id='folderDialog';dialog.className='folder-dialog';dialog.setAttribute('aria-labelledby','folderTitle');document.body.appendChild(dialog);dialog.onclick=onClick;dialog.addEventListener('cancel',e=>{e.preventDefault();closeFolder();});dialog.addEventListener('contextmenu',e=>{const b=e.target.closest('[data-book]');if(b){e.preventDefault();showBookMenu(b.dataset.book);}});dialog.addEventListener('dragstart',e=>{const b=e.target.closest('[data-book]');if(b){e.dataTransfer.setData('application/x-still-book',b.dataset.book);e.dataTransfer.effectAllowed='move';startBookDrag(b.dataset.book);}});dialog.addEventListener('dragend',clearBookDrag);dialog.addEventListener('keydown',e=>{const book=e.target.closest('[data-book]');if(!book)return;if(e.key==='Enter'&&e.shiftKey){e.preventDefault();direct(book.dataset.book);}if(e.key.startsWith('Arrow')){e.preventDefault();const all=R.$$('[data-book]',dialog),n=all.indexOf(book),step=/Left|Up/.test(e.key)?-1:1,next=all[(n+step+all.length)%all.length];all.forEach(b=>b.tabIndex=-1);next.tabIndex=0;next.focus();}});dialog.addEventListener('dragover',e=>{const target=e.target.closest('[data-drop-box]');R.$$('[data-drop-box].drag-target',dialog).forEach(el=>{if(el!==target)el.classList.remove('drag-target');});if(target){e.preventDefault();target.classList.add('drag-target');}});dialog.addEventListener('dragleave',e=>{const target=e.target.closest('[data-drop-box]');if(target && !target.contains(e.relatedTarget))target.classList.remove('drag-target');});dialog.addEventListener('drop',async e=>{const target=e.target.closest('[data-drop-box]'),id=e.dataTransfer.getData('application/x-still-book');clearBookDrag();if(target&&id){e.preventDefault();e.stopPropagation();await move(id,target.dataset.dropBox);}});}
     drawFolder();R.$('.shelving')?.classList.add('folder-focused');folderReturn?.setAttribute('aria-expanded','true');if(!dialog.open)dialog.showModal();
   }
   async function closeFolder(){
@@ -189,7 +233,8 @@ R.study = (() => {
     if(b.hasAttribute('data-folder-import')){R.app.pickFiles(openFolderId);return;}
     if(b.dataset.restoreBook)return R.library.restoreRemoved(b.dataset.restoreBook);
     if(b.hasAttribute('data-restore-box'))return restoreBox();
-    if(b.hasAttribute('data-import')) return R.app.pickFiles();
+    if(b.hasAttribute('data-import')) return R.app.pickFiles('unsorted');
+    if(b.dataset.moveBook) return openMoveDialog(b.dataset.moveBook);
     if(b.dataset.book) {
       if(e.detail>0) lastBookClick={id:b.dataset.book,at:performance.now(),x:e.clientX,y:e.clientY};
       preview(b.dataset.book,b);return;
@@ -219,6 +264,34 @@ R.study = (() => {
     R.$('#bookMenuTitle').textContent=d.title;
     R.$('#bookMove').innerHTML=boxes.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join(''); R.$('#bookMove').value=d.boxId;
     R.$('#bookMenu').showModal();
+  }
+  function openMoveDialog(id) {
+    const d = R.library.get(id);
+    const dialog = R.$('#moveBookDialog');
+    if (!d || !dialog) return;
+    const docs = R.library.all();
+    R.$('#moveBookSummary').textContent = `《${d.title}》 · 当前在「${boxName(d.boxId)}」`;
+    const optionsEl = R.$('#moveBookOptions');
+    optionsEl.innerHTML = boxes.map(box => {
+      const current = box.id === d.boxId;
+      const count = docs.filter(item => item.boxId === box.id).length;
+      return `<button type="button" class="box-picker-option ${current ? 'selected current' : ''}" data-move-target="${esc(box.id)}" ${current ? 'disabled aria-current="true"' : ''}>
+        <span class="box-picker-name">${esc(box.name)}</span>
+        <small class="box-picker-count">${current ? '当前所在' : count + ' 份'}</small>
+      </button>`;
+    }).join('');
+    optionsEl.onclick = async (e) => {
+      const btn = e.target.closest('[data-move-target]');
+      if (!btn || btn.disabled) return;
+      const targetId = btn.dataset.moveTarget;
+      dialog.close();
+      await move(id, targetId);
+      if (previewId === id) {
+        const previewBoxEl = R.$('#previewBox');
+        if (previewBoxEl) previewBoxEl.textContent = boxName(targetId);
+      }
+    };
+    dialog.showModal();
   }
 
   function discardPrepared() { if(prepared) { const p=prepared; prepared=null; p.task?.destroy(); } }
@@ -258,8 +331,26 @@ R.study = (() => {
     if(transitioning)return; if(R.$('#folderDialog')?.open)await closeFolder(); const d=R.library.get(id);if(!d)return;
     transitioning=true; previewId=id;returnFocus=source||document.activeElement;
     const loading=prepare(id); R.$('#previewCover').innerHTML=cover(d,false); R.$('#previewTitle').textContent=d.title;R.$('#previewTitle').dataset.docId=id;
-    R.$('#previewMeta').textContent=`${d.pageCount} P. · 已读 ${pct(d)}% · 上次 P.${String((d.pos?.i||0)+1).padStart(3,'0')} · ${date(d.lastOpened)}`;
-    R.$('#previewBox').textContent=boxName(d.boxId);R.$('#previewQuote').textContent=d.resumeText||'在这里，开启一段新的阅读。';
+    const progressPct = pct(d);
+    const hasProgress = progressPct > 0 || (d.pos?.i || 0) > 0 || !!d.lastOpened;
+    const currentPageNo = (d.pos?.i || 0) + 1;
+    const parts = [`共 ${d.pageCount} 页`];
+    if (hasProgress) parts.push(`已读 ${progressPct}%`, `第 ${currentPageNo} 页`);
+    else parts.push('尚未开始阅读');
+    if (d.boxId === 'unsorted') {
+      const addedText = formatAddedAt(d.addedAt);
+      parts.push(addedText === '导入时间未知' ? '导入时间未知' : '导入 ' + addedText);
+    }
+    R.$('#previewMeta').textContent = parts.join(' · ');
+    const bar = R.$('#previewProgressBar');
+    if (bar) bar.style.width = `${progressPct}%`;
+    R.$('#previewBox').textContent = boxName(d.boxId);
+    const excerptText = (d.resumeText || '').trim();
+    const excerptBox = R.$('#previewExcerpt');
+    R.$('#previewQuote').textContent = excerptText;
+    if (excerptBox) excerptBox.classList.toggle('hidden', !excerptText);
+    R.$('#previewContinue').textContent = hasProgress ? '继续阅读' : '开始阅读';
+    R.$('#previewStart').classList.toggle('hidden', !hasProgress);
     R.$('#previewLoading').classList.add('loading');R.$('#previewDialog').showModal();
     loading.then(()=>R.$('#previewLoading').classList.remove('loading')).catch(e=>{if(previewId===id&&e.name!=='AbortError'){R.$('#previewLoading').classList.remove('loading');R.toast(e.message,'error');}});
     try{ if(source&&!R.motionReduced())await source.animate([{transform:'none'},{transform:'translateY(-14px) rotate(-4deg)'}],{duration:140}).finished.catch(()=>{});await animateBook(source,R.$('#previewCover')); }

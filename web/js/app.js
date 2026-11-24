@@ -65,6 +65,7 @@ R.app = (() => {
       document.body.classList.remove('focus-on', 'calm-idle', 'tool-mode', 'tool-erase');
       R.viewer.close(); meta = null; R.library.setCurrent(null);
       R.$$('.popover').forEach(R.hide);
+      R.hide(R.$('#outlineBackdrop'));
     }
     document.body.classList.toggle('reading', name === 'reader');
     ['home','reader','notes','focus'].forEach(key => R.$('#'+key+'View').classList.toggle('hidden', name !== key));
@@ -184,24 +185,93 @@ R.app = (() => {
   }
 
   /* ---------------- UI 绑定 ---------------- */
-  function pickFiles(boxId = R.study.state.boxFilter) {
+  function normalizeTargetBox(boxId) {
+    const boxes = R.study?.boxes?.() || [];
+    return boxes.some(b => b.id === boxId) ? boxId : 'unsorted';
+  }
+
+  function pickFiles(boxId = 'unsorted') {
     const input = R.$('#fileInput');
-    input.dataset.box = boxId;
+    input.dataset.box = normalizeTargetBox(boxId);
     input.click();
+  }
+
+  function chooseImportBox(files, defaultBoxId = 'unsorted') {
+    const dialog = R.$('#importBoxDialog');
+    const boxes = R.study?.boxes?.() || [];
+    const fallback = normalizeTargetBox(defaultBoxId);
+    if (!dialog || !boxes.length) return Promise.resolve(fallback);
+    const docs = R.library.all();
+    const summary = R.$('#importBoxSummary');
+    const fileListEl = R.$('#importBoxFiles');
+    const optionsEl = R.$('#importBoxOptions');
+    const form = R.$('#importBoxForm');
+    const cancelBtn = R.$('#importBoxCancel');
+    const confirmBtn = R.$('#importBoxConfirm');
+
+    summary.textContent = files.length > 1
+      ? `已选 ${files.length} 份文件，将统一导入到所选收纳盒。`
+      : '写入书库前可选择目标收纳盒。';
+
+    const previewFiles = files.slice(0, 5);
+    fileListEl.innerHTML = previewFiles.map(f => `<li>${R.esc(f.name)}</li>`).join('')
+      + (files.length > previewFiles.length ? `<li class="more">… 等共 ${files.length} 份文件</li>` : '');
+
+    let selected = fallback;
+    const renderOptions = () => {
+      optionsEl.innerHTML = boxes.map(box => {
+        const count = docs.filter(d => d.boxId === box.id).length;
+        const checked = box.id === selected;
+        return `<button type="button" class="box-picker-option ${checked ? 'selected' : ''}" role="radio" aria-checked="${checked}" data-pick-box="${R.esc(box.id)}">
+          <span class="box-picker-radio" aria-hidden="true"></span>
+          <span class="box-picker-name">${R.esc(box.name)}</span>
+          <small class="box-picker-count">${count} 份</small>
+        </button>`;
+      }).join('');
+    };
+    renderOptions();
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        optionsEl.onclick = null;
+        form.onsubmit = null;
+        cancelBtn.onclick = null;
+        dialog.oncancel = null;
+        if (dialog.open) dialog.close();
+        resolve(value);
+      };
+      optionsEl.onclick = (e) => {
+        const btn = e.target.closest('[data-pick-box]');
+        if (!btn) return;
+        selected = btn.dataset.pickBox;
+        renderOptions();
+      };
+      form.onsubmit = (e) => { e.preventDefault(); finish(selected); };
+      cancelBtn.onclick = () => finish(null);
+      dialog.oncancel = (e) => { e.preventDefault(); finish(null); };
+      dialog.showModal();
+      confirmBtn?.focus();
+    });
   }
 
   // Capture FileList synchronously; drop data expires when the event returns.
   let importQueue = Promise.resolve();
-  function enqueueImport(fileList, boxId) {
+  function enqueueImport(fileList, defaultBoxId = 'unsorted') {
     const files = Array.from(fileList);
     if (!files.length) return;
+    const initialBox = normalizeTargetBox(defaultBoxId);
     importQueue = importQueue.then(async () => {
+      const chosenBox = await chooseImportBox(files, initialBox);
+      if (!chosenBox) return;
       await R.study.closeFolder();
       const panel = R.$('#importPanel'), summary = R.$('#importSummary'), list = R.$('#importResults');
       const counts = { added: 0, existing: 0, failed: 0 };
       list.replaceChildren();
       panel.hidden = false;
-      const id = await R.library.importFiles(files, boxId, event => {
+      const id = await R.library.importFiles(files, chosenBox, event => {
         if (event.status === 'reading') {
           summary.textContent = `正在导入 ${event.index + 1}/${event.total} · ${event.file.name}`;
           return;
@@ -225,10 +295,10 @@ R.app = (() => {
 
   function bindUI() {
     const fileInput = R.$('#fileInput');
-    const pick = () => pickFiles();
+    const pick = () => pickFiles('unsorted');
     R.$('#btnImport').onclick = pick;
     fileInput.onchange = () => {
-      enqueueImport(fileInput.files, fileInput.dataset.box || R.study.state.boxFilter);
+      enqueueImport(fileInput.files, fileInput.dataset.box || 'unsorted');
       fileInput.value = '';
     };
     R.$('#importDismiss').onclick = () => { R.$('#importPanel').hidden = true; };
@@ -330,19 +400,30 @@ R.app = (() => {
     R.$('#navHelp').onclick = () => R.show(R.$('#helpModal'));
     R.$('#navSettings').onclick = () => (R.settingsUI ? R.settingsUI.open() : R.toast('设置模块稍后加入'));
 
-    // 拖拽导入
-    let dragN = 0;
-    window.addEventListener('dragenter', (e) => { if (e.dataTransfer.types.includes('Files')) { dragN++; R.show(R.$('#dropOverlay')); } });
-    window.addEventListener('dragleave', () => { if (--dragN <= 0) { dragN = 0; R.hide(R.$('#dropOverlay')); } });
-    window.addEventListener('dragover', (e) => e.preventDefault());
-    window.addEventListener('drop', async (e) => {
+    // 拖拽导入（仅高亮目标盒，不再弹出全屏遮罩页）
+    const clearFileDropHover = () => {
+      R.$$('.file-drop-target').forEach(el => el.classList.remove('file-drop-target'));
+    };
+    window.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer?.types?.includes('Files')) return;
       e.preventDefault();
-      dragN = 0;
-      R.hide(R.$('#dropOverlay'));
-      if (!e.dataTransfer.files.length) return;
+      const target = e.target.closest?.('[data-drop-box], [data-box]');
+      R.$$('.file-drop-target').forEach(el => { if (el !== target) el.classList.remove('file-drop-target'); });
+      if (target) target.classList.add('file-drop-target');
+    });
+    window.addEventListener('dragleave', (e) => {
+      if (!e.relatedTarget) clearFileDropHover();
+    });
+    window.addEventListener('dragend', clearFileDropHover);
+    window.addEventListener('blur', clearFileDropHover);
+    window.addEventListener('pointerdown', clearFileDropHover, { passive: true });
+    window.addEventListener('drop', async (e) => {
+      clearFileDropHover();
+      if (!e.dataTransfer?.files?.length) return;
+      e.preventDefault();
       const target = e.target.closest?.('[data-drop-box], [data-box]');
       const folder = R.$('#folderDialog[open] .folder-contents');
-      enqueueImport(e.dataTransfer.files, target?.dataset.dropBox || target?.dataset.box || folder?.dataset.box || R.study.state.boxFilter);
+      enqueueImport(e.dataTransfer.files, target?.dataset.dropBox || target?.dataset.box || folder?.dataset.box || 'unsorted');
     });
 
     R.$$('.top-nav [data-route]').forEach(b => b.onclick = () => route(b.dataset.route));
@@ -393,6 +474,7 @@ R.app = (() => {
     if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
     if (e.key === 'Escape') {
       R.$$('.modal, .popover').forEach(R.hide);
+      if (!R.$('#outlineBackdrop')?.classList.contains('hidden')) R.reader.toggleOutline(false, false);
       return;
     }
     if (!meta) return;

@@ -75,6 +75,7 @@ R.DEFAULT_SETTINGS = {
   focusHover: false,
   readerSidebarOpen: false,
   readerSidebarTab: 'outline',
+  aiQuickOpen: true,
   lensSize: 'comfort',
   dim: 0.62,
   blur: false,

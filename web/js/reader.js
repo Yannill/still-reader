@@ -2,6 +2,14 @@
 'use strict';
 R.reader = (() => {
   let outlineObserver, token=0, entries=[], previewToken=0, thumbCache=new Map(), seekTimer;
+  const isDrawerViewport = () => window.matchMedia('(max-width: 1199px), (hover: none) and (pointer: coarse)').matches;
+  function syncOutlineBackdrop() {
+    const panel = R.$('#outlinePanel');
+    const backdrop = R.$('#outlineBackdrop');
+    if (!panel || !backdrop) return;
+    const showBackdrop = !panel.classList.contains('hidden') && isDrawerViewport();
+    backdrop.classList.toggle('hidden', !showBackdrop);
+  }
   function init(){
     R.$('#readerHome').onclick=()=>R.study.returnToShelf();
     R.$('#prevPage').onclick=()=>jump(R.viewer.currentPage()-1);
@@ -14,6 +22,9 @@ R.reader = (() => {
       el.onchange=()=>{R.settings[key]=checkbox?el.checked:el.value;R.saveSettings();};
     }
     R.$('#btnOutline').onclick=()=>toggleOutline();
+    const outlineBackdrop = R.$('#outlineBackdrop');
+    if (outlineBackdrop) outlineBackdrop.onclick = () => toggleOutline(false, !isDrawerViewport());
+    window.addEventListener('resize', syncOutlineBackdrop);
     R.$$('.drawer-tabs [data-drawer]').forEach(b=>b.onclick=()=>{if(b.dataset.drawer==='outline')toggleOutline(true);if(b.dataset.drawer==='annot')R.annot.togglePanel(true);if(b.dataset.drawer==='chat')R.chat.toggle(true);});
     R.$('#readerView').insertAdjacentHTML('beforeend','<footer class="reader-progress"><input id="progressSeek" type="range" min="1" max="1" value="1" step="1" aria-label="拖动预览，释放跳转到目标页"><span id="bottomPercent"></span><div id="seekPreview" class="seek-preview hidden" aria-live="polite"><span id="seekLabel"></span><img id="seekImage" alt="目标页缩略预览"></div></footer>');
     const seek=R.$('#progressSeek');
@@ -22,7 +33,7 @@ R.reader = (() => {
     seek.onblur=()=>R.hide(R.$('#seekPreview'));
     R.bus.on('settings',applyPaper);applyPaper();
     R.bus.on('reading-progress',syncProgress);
-    R.bus.on('doc-opened',()=>{toggleOutline(R.settings.readerSidebarOpen,false);});
+    R.bus.on('doc-opened',()=>{toggleOutline(isDrawerViewport() ? false : R.settings.readerSidebarOpen, false);});
     const ro=new ResizeObserver(R.debounce(()=>{if(R.viewer.V.pdf){if(R.viewer.V.fitMode)R.viewer.setScale(R.viewer.V.fitMode==='page'?R.viewer.fitPageScale():R.viewer.fitScale(),{fit:R.viewer.V.fitMode});R.bus.emit('layout');}},120));ro.observe(R.$('#stage'));
   }
   function applyPaper(){document.body.dataset.paper=R.settings.paper;document.body.classList.toggle('reduce-motion',R.motionReduced());R.$('#focusModeControl').value=R.settings.focusMode;}
@@ -33,7 +44,7 @@ R.reader = (() => {
     else {const top=p.el.offsetTop+y*V.scale-20;V.scroller.scrollTo({top,behavior:smooth&&!R.motionReduced()&&Math.abs(top-V.scroller.scrollTop)<V.scroller.clientHeight*2?'smooth':'instant'});}
     R.app.updateProgress();
   }
-  function toggleOutline(force,persist=true){const p=R.$('#outlinePanel'),open=force??p.classList.contains('hidden');p.classList.toggle('hidden',!open);R.$('#btnOutline')?.classList.toggle('on',open);R.$('#btnOutline')?.setAttribute('aria-expanded',open);if(persist){R.settings.readerSidebarOpen=open;R.saveSettings();}window.dispatchEvent(new Event('resize'));}
+  function toggleOutline(force,persist=true){const p=R.$('#outlinePanel'),open=force??p.classList.contains('hidden');p.classList.toggle('hidden',!open);R.$('#btnOutline')?.classList.toggle('on',open);R.$('#btnOutline')?.setAttribute('aria-expanded',String(open));syncOutlineBackdrop();if(persist && !isDrawerViewport()){R.settings.readerSidebarOpen=open;R.saveSettings();}window.dispatchEvent(new Event('resize'));}
   function syncProgress({page,percent,y:positionY}){
     const n=R.viewer.V.pages.length;const bp=R.$('#bottomPercent');if(bp)bp.textContent=Math.round(percent*100)+'%';
     const seek=R.$('#progressSeek');seek.max=n;if(document.activeElement!==seek)seek.value=page;

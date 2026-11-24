@@ -27,6 +27,11 @@ R.chat = (() => {
     });
     ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(140, ta.scrollHeight) + 'px'; });
     R.$('#chatQuick').onclick = (e) => { const b = e.target.closest('[data-q]'); if (b) send(QUICK[b.dataset.q], { label: b.textContent }); };
+    const quickToggle = R.$('#btnChatQuickToggle');
+    if (quickToggle) {
+      quickToggle.onclick = () => setQuickOpen(R.settings.aiQuickOpen === false);
+      setQuickOpen(R.settings.aiQuickOpen !== false, false);
+    }
     R.$('#btnChatClear').onclick = clear;
     R.$('#chatModel').onchange = (e) => { R.settings.ai.model = e.target.value; R.saveSettings(); };
     R.$('#chatMsgs').addEventListener('click', (e) => {
@@ -38,8 +43,6 @@ R.chat = (() => {
         send(text);
       }
     });
-    const contextLabel = () => { R.$('#chatDisclosure').textContent = '将发送：' + [R.$('#ctxPage').checked ? '本页文字（扫描页为本页图像）' : '', R.$('#ctxLine').checked ? '当前句' : '', C.quote ? '选中引用' : ''].filter(Boolean).join(' + ') + '；不发送整份 PDF'; };
-    R.$('#chatCtx').onchange = contextLabel; contextLabel();
     R.bus.on('settings', fillModels);
     document.addEventListener('keydown', (e) => {
       const tag = (e.target.tagName || '').toLowerCase();
@@ -69,10 +72,25 @@ R.chat = (() => {
   }
   const save = () => C.docId && R.db.put('chats', { id: C.docId, messages: C.messages.slice(-80) });
 
+  function setQuickOpen(open, persist = true) {
+    const group = R.$('#chatQuickGroup');
+    const body = R.$('#chatQuick');
+    const btn = R.$('#btnChatQuickToggle');
+    const state = R.$('#chatQuickState');
+    if (group) group.classList.toggle('collapsed', !open);
+    if (body) body.classList.toggle('hidden', !open);
+    if (btn) btn.setAttribute('aria-expanded', String(!!open));
+    if (state) state.textContent = open ? '收起' : '展开';
+    if (persist) {
+      R.settings.aiQuickOpen = !!open;
+      R.saveSettings();
+    }
+  }
+
   function toggle(force) {
     const p = R.$('#chatPanel');
     const open = force === undefined ? p.classList.contains('hidden') : force;
-    if (open) { R.hide(R.$('#outlinePanel')); R.$('#btnOutline').classList.remove('on'); R.hide(R.$('#annotPanel')); R.$('#btnAnnotPanel').classList.remove('on'); }
+    if (open) { R.hide(R.$('#annotPanel')); R.$('#btnAnnotPanel')?.classList.remove('on'); }
     p.classList.toggle('hidden', !open);
     R.$('#btnChat')?.classList.toggle('on', open);
     window.dispatchEvent(new Event('resize'));
@@ -91,7 +109,7 @@ R.chat = (() => {
     C.image = image;
     const el = R.$('#chatQuote');
     if (!q) return R.hide(el);
-    el.innerHTML = `引用：${R.esc(q.slice(0, 120))}<span class="x" title="移除">×</span>`;
+    el.innerHTML = `<span class="chat-quote-text">引用：${R.esc(q.slice(0, 120))}</span><button type="button" class="x" aria-label="移除引用" title="移除引用">×</button>`;
     R.show(el);
     R.$('.x', el).onclick = () => setQuote(null);
   }
@@ -112,7 +130,7 @@ R.chat = (() => {
       const ready = R.ai.isReady();
       box.innerHTML = `<div class="chat-welcome">
         <div class="cw-title">读不进去？问我就好。</div>
-        <p class="cw-desc">我能看到你 <b>正在读的这一页</b> 和 <b>专注框里的句子</b>。可以点下方快捷问题，或直接输入想法。</p>
+        <p class="cw-desc">我能结合你勾选的 <b>本页内容</b> 和 <b>专注框内文字</b> 来回答。可以点下方快捷提问，或直接输入想法。</p>
         <p class="cw-sub">这份文档的对话会自动保存在本地，下次打开仍在。</p>
         ${ready
           ? `<div class="cw-status">当前模型：<b>${R.esc(R.ai.preset().name)}</b> · ${R.esc(R.settings.ai.model)}</div>`
@@ -135,13 +153,15 @@ R.chat = (() => {
     if (meta) parts.push(`【文档】${meta.title}（${meta.name}）`);
     const pageI = R.viewer.currentPage();
     const cur = R.focus.isOn() ? R.focus.current() : null;
+    const focusPayload = R.focus.isOn() ? R.focus.activePayload?.() : null;
+    const focusText = (focusPayload?.text || cur?.line?.text || '').trim();
     let image = C.image;
     if (R.$('#ctxPage').checked) {
       const t = await R.viewer.pageText(pageI);
       if (t) parts.push(`【第 ${pageI + 1} 页内容】\n${t.slice(0, 3500)}`);
       else if (!image && R.ai.supportsVision()) image = await R.viewer.pageImage(pageI, null, 1100);
     }
-    if (R.$('#ctxLine').checked && cur && cur.line.text) parts.push(`【当前句（专注框里）】${cur.line.text}`);
+    if (R.$('#ctxLine').checked && focusText) parts.push(`【专注框内文字】${focusText}`);
     if (C.quote) parts.push(`【用户选中的内容】${C.quote}`);
     return { text: parts.join('\n\n'), image };
   }

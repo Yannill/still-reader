@@ -384,10 +384,9 @@ R.annot = (() => {
   function togglePanel(force) {
     const p = R.$('#annotPanel');
     const open = force === undefined ? p.classList.contains('hidden') : force;
-    if (open) { R.hide(R.$('#chatPanel')); R.hide(R.$('#outlinePanel')); R.$('#btnOutline').classList.remove('on'); }
+    if (open) { R.hide(R.$('#chatPanel')); R.$('#btnChat')?.classList.remove('on'); }
     p.classList.toggle('hidden', !open);
     R.$('#btnAnnotPanel')?.classList.toggle('on', open);
-    R.$('#btnChat')?.classList.remove('on');
     renderPanel();
     window.dispatchEvent(new Event('resize'));
   }
